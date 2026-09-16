@@ -1,0 +1,28 @@
+# MedScholar Agent 核心依赖
+# 安装：.python\python.exe -m pip install -r requirements.txt
+# 国内加速：加 -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+fastapi>=0.110
+uvicorn[standard]>=0.27
+httpx>=0.27
+pydantic>=2.6
+pyyaml>=6.0
+sqlite-vec>=0.1.6
+python-multipart>=0.0.9
+
+# ---------------------------------------------------------------------------
+# 可选依赖（按需取消注释）
+# ---------------------------------------------------------------------------
+
+# 本地 PDF 全文解析（Reader Agent 处理开放获取 PDF）
+# pymupdf>=1.24
+
+# 离线 PubMedBERT 嵌入（替代 Ollama 嵌入；需下载约 400MB 模型 + torch 约 2GB）
+# sentence-transformers>=2.7
+
+# MCP Server（把工具暴露给 Claude Desktop / Cursor 等客户端）
+# mcp>=1.2
+
+# 开发与测试
+# pytest>=8.0
+# pytest-asyncio>=0.23

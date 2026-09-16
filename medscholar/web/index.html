@@ -1,0 +1,676 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="MedScholar Agent —— 本地化医学学术文献检索、综述写作与引用管理研究助手。">
+  <title>MedScholar Agent · 医学学术研究助手</title>
+  <!-- 服务器把 web 目录挂载在 /static，因此样式与脚本均使用相对静态路径，无任何外部依赖 -->
+  <link rel="stylesheet" href="./static/style.css">
+</head>
+<body>
+
+<!-- ============================================================
+     内联 SVG 图标精灵：全部手写，保证离线可用、无外部字体/图片
+     ============================================================ -->
+<svg class="icon-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-logo" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18" stroke-width="2"/><circle cx="12" cy="12" r="9" stroke-width="1.4"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 4.5 4.5"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 2.5 15.4 0 18M12 3c-2.5 2.6-2.5 15.4 0 18"/></symbol>
+  <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 15a2 2 0 0 1-2 2H8l-4 4V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></symbol>
+  <symbol id="i-quote" viewBox="0 0 24 24"><path d="M7 7h4v6a4 4 0 0 1-4 4M15 7h4v6a4 4 0 0 1-4 4"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12.5 5.2 5.2L20 7"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5 22 20H2z"/><path d="M12 9.5v5M12 17.6v.1"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.6v.2"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M4.2 7l2.6 1.5M17.2 15.5l2.6 1.5M4.2 17l2.6-1.5M17.2 8.5 19.8 7"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 4 12L16 12h5"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v4h-4"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v11m0 0 4-4m-4 4-4-4M4 20h16"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.8h6V7M6 7l1 13h10l1-13M10 11v6M14 11v6"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9.5 6 6 6-6"/></symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8.5 8.5"/><path d="M18 14.5V19a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 19V8a1.5 1.5 0 0 1 1.5-1.5H10"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 6.5V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h1.5"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v6c0 4.2 3 7.6 7 9 4-1.4 7-4.8 7-9V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.4l3.4 2"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 11.5 20.5 4l-7.2 16.4-2.1-6.4z"/><path d="m11.2 14 9.3-10"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5h16l-6.2 7.4V19l-3.6 2v-8.6z"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.6-5.9"/><path d="M4 4v4h4"/></symbol>
+</svg>
+
+<div class="app" id="app">
+
+  <!-- ============================================================
+       顶部工具栏：课题输入 | 数据源多选 | 引用格式 | 设置 / 健康状态
+       ============================================================ -->
+  <header class="toolbar" role="banner">
+    <div class="brand" title="MedScholar Agent · 本地医学学术研究助手">
+      <svg class="ic brand-mark" aria-hidden="true"><use href="#i-logo"></use></svg>
+      <span class="brand-text">
+        <strong>MedScholar</strong><small>Agent</small>
+      </span>
+      <span class="brand-ver" id="brandVersion" hidden></span>
+    </div>
+
+    <div class="tool-group tool-topic">
+      <label class="field-label" for="topicInput">课题</label>
+      <input id="topicInput" class="input input-topic" type="text" autocomplete="off" spellcheck="false"
+             placeholder="输入研究课题，例如：加速rTMS治疗卒中后抑郁的疗效与安全性">
+    </div>
+
+    <div class="tool-group">
+      <span class="field-label" id="sourceSelectLabel">数据源</span>
+      <div class="dropdown" id="sourceDropdown">
+        <button type="button" class="btn btn-select" id="sourceSelectBtn"
+                aria-haspopup="true" aria-expanded="false" aria-labelledby="sourceSelectLabel">
+          <span id="sourceSelectText">数据源</span>
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+        </button>
+        <div class="dropdown-menu" id="sourceMenu" role="group" aria-labelledby="sourceSelectLabel" hidden>
+          <div class="dropdown-head">
+            <span>选择检索数据源</span>
+            <div class="dropdown-head-actions">
+              <button type="button" class="link-btn" data-sources-all="default">默认</button>
+              <button type="button" class="link-btn" data-sources-all="none">清空</button>
+            </div>
+          </div>
+          <div class="dropdown-body" id="sourceMenuBody"><!-- 由 app.js 依据 /api/health 渲染 --></div>
+          <p class="dropdown-foot" id="sourceMenuFoot">CNKI 需要本机可访问的网络环境，失败时会在结果中单独标注。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="tool-group">
+      <label class="field-label" for="citeStyleSelect">引用格式</label>
+      <select id="citeStyleSelect" class="input input-select">
+        <!-- 启动后用 GET /api/cite/styles 覆盖，此处为离线兜底选项 -->
+        <option value="gb7714">GB/T 7714-2015</option>
+        <option value="apa7">APA 7th</option>
+        <option value="vancouver">Vancouver</option>
+        <option value="chicago">Chicago</option>
+        <option value="bibtex">BibTeX</option>
+        <option value="ris">RIS</option>
+      </select>
+    </div>
+
+    <div class="tool-group tool-actions">
+      <button type="button" class="btn btn-primary" id="runAgentBtn" title="开始研究工作流（Ctrl/Cmd+Enter）">
+        <svg class="ic ic-sm" aria-hidden="true"><use href="#i-play"></use></svg>
+        <span>开始研究</span>
+      </button>
+      <button type="button" class="btn btn-cancel" id="cancelRunBtn" hidden>
+        <svg class="ic ic-sm" aria-hidden="true"><use href="#i-x"></use></svg>
+        <span>中止</span>
+      </button>
+      <button type="button" class="btn btn-icon" id="settingsBtn" title="设置与健康状态" aria-label="设置与健康状态">
+        <svg class="ic" aria-hidden="true"><use href="#i-gear"></use></svg>
+        <span class="health-dot" id="healthDot" data-state="unknown" aria-hidden="true"></span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 健康状态提示条：LLM / 向量模型 / 知识库不可用时以琥珀色横幅说明降级范围 -->
+  <div class="banner" id="healthBanner" role="status" hidden>
+    <svg class="ic banner-ic" aria-hidden="true"><use href="#i-alert"></use></svg>
+    <div class="banner-body">
+      <strong class="banner-title" id="healthBannerTitle">运行状态提示</strong>
+      <ul class="banner-list" id="healthBannerList"></ul>
+    </div>
+    <div class="banner-actions">
+      <button type="button" class="btn btn-sm" id="healthBannerRetry">重新检测</button>
+      <button type="button" class="btn btn-icon btn-sm" id="healthBannerClose" aria-label="关闭提示">
+        <svg class="ic ic-sm" aria-hidden="true"><use href="#i-x"></use></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       三栏工作台：左（会话/文献库/知识库）· 中（对话）· 右（产物）
+       两条 gutter 可拖拽调宽，宽度持久化到 localStorage
+       ============================================================ -->
+  <main class="workbench" id="workbench">
+
+    <!-- ------------------------------------------------------ 左栏 -->
+    <aside class="col col-left" id="colLeft" aria-label="资料栏">
+      <section class="panel panel-sessions">
+        <header class="panel-head">
+          <h2 class="panel-title"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-chat"></use></svg>会话历史</h2>
+          <button type="button" class="btn btn-icon btn-sm" id="refreshSessionsBtn" title="刷新会话列表" aria-label="刷新会话列表">
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>
+          </button>
+        </header>
+        <div class="panel-scroll" id="sessionList">
+          <p class="empty-hint">加载中…</p>
+        </div>
+      </section>
+
+      <section class="panel panel-library">
+        <header class="panel-head">
+          <h2 class="panel-title"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-database"></use></svg>文献库</h2>
+          <span class="chip" id="libraryCount">0</span>
+        </header>
+        <div class="panel-tools">
+          <div class="input-wrap">
+            <svg class="ic ic-sm input-wrap-ic" aria-hidden="true"><use href="#i-search"></use></svg>
+            <input id="libraryFilter" class="input input-sm" type="search" autocomplete="off"
+                   placeholder="过滤标题 / 作者 / 期刊">
+          </div>
+          <select id="librarySort" class="input input-sm input-select" title="排序方式">
+            <option value="created_desc">最近入库</option>
+            <option value="year_desc">年份降序</option>
+            <option value="year_asc">年份升序</option>
+            <option value="cited_desc">被引降序</option>
+            <option value="title_asc">标题 A→Z</option>
+          </select>
+          <button type="button" class="btn btn-sm" id="importBtn"
+                  title="导入 RIS / BibTeX / EndNote 标记文本 / WoS 纯文本 / CSV 题录文件">
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-download"></use></svg><span>导入</span>
+          </button>
+          <input type="file" id="importFile" accept=".ris,.bib,.bibtex,.enw,.ref,.txt,.csv,.tsv"
+                 multiple hidden>
+        </div>
+        <div class="import-hint" id="importHint" hidden></div>
+        <div class="panel-scroll" id="libraryList">
+          <p class="empty-hint">加载中…</p>
+        </div>
+      </section>
+
+      <section class="panel panel-kb">
+        <header class="panel-head">
+          <h2 class="panel-title"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-activity"></use></svg>知识库</h2>
+          <span class="chip chip-quiet" id="kbBackend">—</span>
+          <span class="chip chip-teal" id="learningChip" hidden title="学习闭环进度">学习闭环</span>
+          <button type="button" class="btn btn-icon btn-sm" id="refreshKbBtn" title="刷新知识库统计" aria-label="刷新知识库统计">
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-refresh"></use></svg>
+          </button>
+        </header>
+        <div class="panel-scroll" id="kbStats">
+          <p class="empty-hint">加载中…</p>
+        </div>
+      </section>
+    </aside>
+
+    <div class="gutter" id="gutterLeft" role="separator" aria-orientation="vertical"
+         aria-label="调整左栏宽度" tabindex="0" data-resize="left"></div>
+
+    <!-- ------------------------------------------------------ 中栏 -->
+    <section class="col col-mid" id="colMid" aria-label="对话栏">
+
+      <!-- 检索面板：联网检索（POST /api/search/live）与本地知识库混合检索（POST /api/papers/search） -->
+      <section class="panel panel-search" id="searchPanel">
+        <header class="panel-head">
+          <h2 class="panel-title">
+            <button type="button" class="disclosure" id="searchToggle" aria-expanded="true" aria-controls="searchBody">
+              <svg class="ic ic-sm disclosure-ic" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+              <svg class="ic ic-sm" aria-hidden="true"><use href="#i-globe"></use></svg>
+              <span>检索</span>
+            </button>
+          </h2>
+          <div class="segmented" role="tablist" aria-label="检索模式">
+            <button type="button" class="seg-btn is-active" role="tab" aria-selected="true" data-search-mode="live">联网检索</button>
+            <button type="button" class="seg-btn" role="tab" aria-selected="false" data-search-mode="local">本地知识库</button>
+          </div>
+        </header>
+
+        <div class="panel-body" id="searchBody">
+          <form class="search-form" id="searchForm" autocomplete="off">
+            <div class="input-wrap input-wrap-grow">
+              <svg class="ic ic-sm input-wrap-ic" aria-hidden="true"><use href="#i-search"></use></svg>
+              <input id="searchQuery" class="input" type="search" placeholder="检索关键词（Ctrl/Cmd+K）" aria-label="检索关键词">
+            </div>
+            <button type="button" class="btn btn-sm" id="syncTopicBtn" title="把工具栏课题复制为检索词"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-undo"></use></svg><span>取课题</span></button>
+
+            <div class="search-fields">
+              <label class="mini-field">
+                <span>起始年</span>
+                <input id="searchYearFrom" class="input input-sm" type="number" min="1900" max="2100" step="1" placeholder="2015">
+              </label>
+              <label class="mini-field">
+                <span>截止年</span>
+                <input id="searchYearTo" class="input input-sm" type="number" min="1900" max="2100" step="1" placeholder="不限">
+              </label>
+              <label class="mini-field" data-mode="live">
+                <span>每源上限</span>
+                <input id="searchPerSource" class="input input-sm" type="number" min="1" max="100" step="1" value="20">
+              </label>
+              <label class="mini-field" data-mode="local" hidden>
+                <span>返回条数</span>
+                <input id="searchTopK" class="input input-sm" type="number" min="1" max="100" step="1" value="20">
+              </label>
+            </div>
+
+            <!--
+              组合检索：实时回显后端如何解析这段输入。
+              解析逻辑来自后端 /api/query/preview，与真正检索同源，
+              因此"预览所见 = 实际所发"。
+            -->
+            <div class="query-builder" data-mode="live">
+              <div class="query-syntax">
+                <span class="query-syntax-label">组合检索</span>
+                <button type="button" class="btn btn-xs" data-insert=" | " title="前后两个词任选其一（同义词）">或 OR</button>
+                <button type="button" class="btn btn-xs" data-insert=" -" title="排除某个词">排除 -</button>
+                <button type="button" class="btn btn-xs" data-insert-quote title="精确短语匹配">"短语"</button>
+                <button type="button" class="btn btn-xs" id="queryClearBtn" title="清空检索词">清空</button>
+              </div>
+              <div class="query-preview" id="queryPreview" hidden>
+                <span class="query-preview-label">将检索：</span>
+                <span class="query-preview-text" id="queryPreviewText"></span>
+                <button type="button" class="query-preview-detail" id="queryDetailToggle" aria-expanded="false">各库语法</button>
+              </div>
+              <div class="query-detail" id="queryDetail" hidden></div>
+              <div class="query-hint">
+                空格/逗号 = 同时包含　·　<span class="mono">|</span> 或 <span class="mono">OR</span> 或 <span class="mono">;</span> = 任选其一　·　<span class="mono">-</span> 或 <span class="mono">NOT</span> = 排除　·　<span class="mono">"引号"</span> = 精确短语
+              </div>
+            </div>
+
+            <div class="search-switches">
+              <label class="switch" data-mode="live">
+                <input type="checkbox" id="searchOpenAccess">
+                <span>仅开放获取</span>
+              </label>
+              <label class="switch" data-mode="live">
+                <input type="checkbox" id="searchSave" checked>
+                <span>入库</span>
+              </label>
+              <label class="switch" data-mode="live">
+                <input type="checkbox" id="searchEmbed" checked>
+                <span>生成向量</span>
+              </label>
+              <label class="switch" data-mode="local" hidden>
+                <input type="checkbox" id="searchLocalOA">
+                <span>仅开放获取</span>
+              </label>
+              <button type="button" class="search-srcnote search-srcnote-btn" id="searchSourceNote" title="点击选择数据源">数据源：—</button>
+            </div>
+
+            <div class="search-actions">
+              <button type="submit" class="btn btn-primary btn-sm" id="searchSubmitBtn">
+                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-search"></use></svg>
+                <span id="searchSubmitText">开始联网检索</span>
+              </button>
+              <span class="search-progress" id="searchProgress" hidden>检索中…</span>
+            </div>
+          </form>
+
+          <!-- 单源状态行：每个数据源的成功条数 / 失败原因 / 耗时，部分失败在此显式呈现 -->
+          <div class="source-status" id="sourceStatus" hidden></div>
+          <div class="search-summary" id="searchSummary" hidden></div>
+        </div>
+      </section>
+
+      <!-- 对话视口 -->
+      <section class="panel panel-chat" id="chatPanel">
+        <header class="panel-head panel-head-chat">
+          <h2 class="panel-title"><svg class="ic ic-sm" aria-hidden="true"><use href="#i-layers"></use></svg>对话视口</h2>
+          <ol class="phase-track" id="phaseTrack" aria-label="工作流阶段">
+            <li data-phase="plan">规划</li>
+            <li data-phase="execute">执行</li>
+            <li data-phase="reflect">反思</li>
+            <li data-phase="synthesize">综合</li>
+            <li data-phase="done">完成</li>
+          </ol>
+          <div class="panel-head-right">
+            <span class="run-status" id="runStatusLine" hidden></span>
+            <span class="chip chip-quiet" id="runStateChip" hidden></span>
+            <button type="button" class="btn btn-icon btn-sm" id="clearChatBtn" title="清空对话视口" aria-label="清空对话视口">
+              <svg class="ic ic-sm" aria-hidden="true"><use href="#i-trash"></use></svg>
+            </button>
+          </div>
+        </header>
+
+        <div class="chat-scroll" id="messageStream" role="log" aria-live="polite" aria-relevant="additions text">
+          <div class="welcome" id="welcomeBlock">
+            <h3>MedScholar Agent</h3>
+            <p>本地化医学学术研究助手：多源文献检索 → 规划与人工审批 → 证据提取 → 综述草稿 → 引用导出。</p>
+            <ul class="welcome-steps">
+              <li><kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>K</kbd> 聚焦检索框</li>
+              <li><kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Enter</kbd> 启动研究工作流</li>
+              <li><kbd>Enter</kbd> 发送消息，<kbd>Shift</kbd> + <kbd>Enter</kbd> 换行</li>
+            </ul>
+            <p class="welcome-note" id="welcomeHealthNote"></p>
+          </div>
+        </div>
+
+        <!-- 工具调用面板：阶段切换、逐条检索（含各源条数与错误）、批评论证等 Agent 步骤 -->
+        <section class="toolpanel" id="toolPanel">
+          <header class="toolpanel-head">
+            <button type="button" class="disclosure" id="toolToggle" aria-expanded="true" aria-controls="toolBody">
+              <svg class="ic ic-sm disclosure-ic" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+              <svg class="ic ic-sm" aria-hidden="true"><use href="#i-activity"></use></svg>
+              <span>工具调用面板</span>
+            </button>
+            <span class="chip chip-quiet" id="toolCount">0</span>
+          </header>
+          <div class="toolpanel-body" id="toolBody">
+            <div class="toolpanel-scroll" id="toolList">
+              <p class="empty-hint">尚无工具调用。运行研究工作流后，这里会逐条显示每个 Agent 步骤。</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- 输入框：Enter 发送 / Shift+Enter 换行；上方可切换「提问 / 研究」两种模式 -->
+        <form class="composer" id="composerForm">
+          <div class="composer-modes" role="tablist" aria-label="输入模式">
+            <button type="button" class="composer-mode is-active" role="tab" aria-selected="true"
+                    data-composer-mode="ask" title="基于本地知识库直接回答问题，不启动完整研究流程">
+              <svg class="ic ic-sm" aria-hidden="true"><use href="#i-chat"></use></svg><span>提问</span>
+            </button>
+            <button type="button" class="composer-mode" role="tab" aria-selected="false"
+                    data-composer-mode="research" title="以该课题启动完整的检索 → 评估 → 综述流程">
+              <svg class="ic ic-sm" aria-hidden="true"><use href="#i-play"></use></svg><span>研究</span>
+            </button>
+            <label class="composer-askopts" data-composer-mode-opt="ask">
+              <span>检索篇数</span>
+              <input id="askTopK" class="input input-sm" type="number" min="1" max="30" step="1" value="8">
+            </label>
+          </div>
+          <textarea id="composerInput" class="composer-input" rows="1" spellcheck="false"
+                    placeholder="问一个关于文献的问题…（Enter 提问，Shift+Enter 换行）" aria-label="对话输入"></textarea>
+          <div class="composer-bar">
+            <span class="composer-hint" id="composerHint">Enter 提问 · Shift+Enter 换行 · 切到「研究」可启动完整综述流程</span>
+            <button type="submit" class="btn btn-primary btn-sm" id="composerSendBtn">
+              <svg class="ic ic-sm" aria-hidden="true"><use href="#i-send"></use></svg><span id="composerSendText">提问</span>
+            </button>
+          </div>
+        </form>
+      </section>
+    </section>
+
+    <div class="gutter" id="gutterRight" role="separator" aria-orientation="vertical"
+         aria-label="调整中栏宽度" tabindex="0" data-resize="right"></div>
+
+    <!-- ------------------------------------------------------ 右栏 -->
+    <aside class="col col-right" id="colRight" aria-label="产物预览">
+      <div class="tabs" role="tablist" aria-label="产物视图">
+        <button type="button" class="tab is-active" role="tab" aria-selected="true" data-tab="papers">
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-file"></use></svg><span>文献卡片</span>
+          <span class="tab-badge" id="tabBadgePapers" hidden>0</span>
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="draft">
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-layers"></use></svg><span>综述草稿</span>
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="citations">
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-quote"></use></svg><span>引用列表</span>
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="manuscript">
+          <svg class="ic ic-sm" aria-hidden="true"><use href="#i-file"></use></svg><span>论文写作</span>
+        </button>
+      </div>
+
+      <!-- 选中项工具条：驱动 POST /api/cite 与 POST /api/export -->
+      <div class="artifact-bar" id="artifactBar">
+        <div class="artifact-bar-left">
+          <label class="switch switch-tight">
+            <input type="checkbox" id="selectAllPapers">
+            <span>全选</span>
+          </label>
+          <span class="chip" id="selectedCount">已选 0 篇</span>
+        </div>
+        <div class="artifact-bar-right">
+          <select id="exportFormat" class="input input-sm input-select" title="导出格式">
+            <option value="bibtex">BibTeX</option>
+            <option value="ris">RIS</option>
+            <option value="gb7714">GB/T 7714-2015</option>
+            <option value="apa7">APA 7th</option>
+            <option value="vancouver">Vancouver</option>
+            <option value="csv">CSV 表格</option>
+            <option value="json">JSON</option>
+            <option value="markdown">Markdown</option>
+            <option value="html">HTML</option>
+          </select>
+          <button type="button" class="btn btn-sm" id="generateCiteBtn">
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-quote"></use></svg><span>生成引用</span>
+          </button>
+          <button type="button" class="btn btn-sm btn-primary" id="exportBtn">
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-download"></use></svg><span>导出</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="tabpanes">
+        <div class="tabpane is-active" data-pane="papers" id="papersPane">
+          <div class="pane-scroll" id="papersList">
+            <p class="empty-hint">尚无文献。先执行一次检索，或启动研究工作流。</p>
+          </div>
+        </div>
+
+        <div class="tabpane" data-pane="draft" id="draftPane">
+          <div class="draft-toolbar" id="draftToolbar" hidden>
+            <select id="draftPicker" class="input input-sm input-select"></select>
+            <button type="button" class="btn btn-sm" id="copyDraftBtn" title="复制草稿全文">
+              <svg class="ic ic-sm" aria-hidden="true"><use href="#i-copy"></use></svg><span>复制</span>
+            </button>
+          </div>
+          <div class="pane-scroll markdown-body" id="draftContent">
+            <!-- 空状态由 app.js 依据实际运行状态填充：这次运行是被中断、
+                 还是根本没开始，给出的提示完全不同 -->
+            <p class="empty-hint" id="draftEmptyHint">尚无综述草稿。Agent 进入「综合」阶段后会在此流式呈现。</p>
+          </div>
+        </div>
+
+        <div class="tabpane" data-pane="citations" id="citationsPane">
+          <div class="cite-toolbar">
+            <span class="cite-style-label">当前格式：<strong id="citeStyleName">GB/T 7714-2015</strong></span>
+            <button type="button" class="btn btn-sm" id="copyCitationsBtn">
+              <svg class="ic ic-sm" aria-hidden="true"><use href="#i-copy"></use></svg><span>复制</span>
+            </button>
+          </div>
+          <div class="pane-scroll" id="citationsList">
+            <p class="empty-hint">在「文献卡片」中勾选文献后点击「生成引用」。</p>
+          </div>
+        </div>
+
+        <div class="tabpane" data-pane="manuscript" id="manuscriptPane">
+          <div class="pane-scroll">
+            <div class="ms-intro">
+              <strong>根据你的实验数据写论文初稿</strong>
+              <p>综述是「基于文献」的总结；这里是「基于你自己的数据」。请填下面几项，
+                系统会在<b>你的数据 + 本地知识库文献</b>的基础上按 IMRaD 生成初稿，
+                并对正文里<b>每一个数字做溯源校验</b>——找不到出处的数字会被单独列出来，
+                避免把编造的数据带进论文。</p>
+            </div>
+
+            <div class="ms-form">
+              <label class="ms-row"><span>拟定标题</span>
+                <input id="msTitle" class="input input-sm" type="text" placeholder="例如：加速rTMS治疗卒中后抑郁的随机对照试验"></label>
+              <label class="ms-row"><span>研究目标 *</span>
+                <textarea id="msGoal" class="input input-sm" rows="2" placeholder="本研究旨在评估……"></textarea></label>
+              <label class="ms-row"><span>研究假设</span>
+                <input id="msHypothesis" class="input input-sm" type="text" placeholder="加速rTMS优于常规rTMS"></label>
+              <label class="ms-row"><span>研究设计 *</span>
+                <input id="msDesign" class="input input-sm" type="text" placeholder="单中心随机对照试验 / 回顾性队列 …"></label>
+              <label class="ms-row"><span>研究对象与纳排 *</span>
+                <textarea id="msPopulation" class="input input-sm" rows="2" placeholder="纳入 120 例卒中后抑郁患者，年龄 18~75 岁……"></textarea></label>
+              <label class="ms-row"><span>干预与对照</span>
+                <textarea id="msIntervention" class="input input-sm" rows="2" placeholder="试验组：加速rTMS（每日 5 次，共 5 天）；对照组：常规rTMS"></textarea></label>
+              <label class="ms-row"><span>结局指标 *</span>
+                <textarea id="msOutcomes" class="input input-sm" rows="2" placeholder="主要结局：HAMD-17 评分变化；次要结局：反应率、不良反应发生率"></textarea></label>
+              <label class="ms-row"><span>统计方法</span>
+                <input id="msStatistics" class="input input-sm" type="text" placeholder="t 检验 / 卡方检验 / 重复测量方差分析，SPSS 26.0"></label>
+              <label class="ms-row"><span>实验数据</span>
+                <textarea id="msData" class="input input-sm ms-mono" rows="6"
+                          placeholder="粘贴你的数据（表格/CSV 均可），例如：&#10;组别,例数,HAMD基线,HAMD治疗后,P值&#10;加速rTMS,60,24.3±5.1,9.8±3.2,&lt;0.001&#10;常规rTMS,60,24.1±4.9,14.6±4.1,0.012"></textarea></label>
+              <label class="ms-row"><span>已知统计结果</span>
+                <textarea id="msResults" class="input input-sm" rows="3" placeholder="两组治疗后 HAMD 差异有统计学意义（P&lt;0.001，95%CI 2.1~7.5）……"></textarea></label>
+              <label class="ms-row"><span>已知局限</span>
+                <textarea id="msLimitations" class="input input-sm" rows="2" placeholder="单中心、样本量小、随访仅 4 周……"></textarea></label>
+              <label class="ms-row"><span>目标期刊</span>
+                <input id="msJournal" class="input input-sm" type="text" placeholder="留空则按通用格式"></label>
+            </div>
+
+            <div class="ms-actions">
+              <label class="switch switch-tight">
+                <input type="checkbox" id="msUseLibrary" checked>
+                <span>引用本地知识库文献</span>
+              </label>
+              <button type="button" class="btn btn-sm btn-primary" id="msDraftBtn">
+                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-play"></use></svg><span>生成初稿</span>
+              </button>
+              <button type="button" class="btn btn-sm" id="msCopyBtn" hidden>
+                <svg class="ic ic-sm" aria-hidden="true"><use href="#i-copy"></use></svg><span>复制全文</span>
+              </button>
+              <span class="ms-status" id="msStatus"></span>
+            </div>
+
+            <div class="ms-checks" id="msChecks" hidden></div>
+            <div class="pane-scroll markdown-body ms-draft" id="msDraft" hidden></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 底部元数据条：健康状态 / 运行信息的紧凑摘要 -->
+      <div class="meta-strip" id="metaStrip">
+        <span class="meta-item" id="metaModel">模型：—</span>
+        <span class="meta-item" id="metaEmbed">向量：—</span>
+        <span class="meta-item" id="metaPapers">文献：—</span>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<!-- ============================================================
+     设置 / 健康状态对话框
+     ============================================================ -->
+<div class="modal-backdrop" id="settingsModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <header class="modal-head">
+      <h2 id="settingsTitle">设置与运行状态</h2>
+      <button type="button" class="btn btn-icon btn-sm" id="settingsCloseBtn" aria-label="关闭">
+        <svg class="ic ic-sm" aria-hidden="true"><use href="#i-x"></use></svg>
+      </button>
+    </header>
+
+    <div class="modal-tabs" role="tablist">
+      <button type="button" class="tab is-active" role="tab" aria-selected="true" data-mtab="runtime">运行设置</button>
+      <button type="button" class="tab" role="tab" aria-selected="false" data-mtab="health">健康状态</button>
+      <button type="button" class="tab" role="tab" aria-selected="false" data-mtab="maintenance">知识库维护</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="modal-pane is-active" data-mpane="runtime">
+        <label class="form-row">
+          <span class="form-label">接口基地址</span>
+          <input id="settingApiBase" class="input" type="text" spellcheck="false" placeholder="留空表示同源（推荐）">
+          <small class="form-help">留空即使用当前页面的源（例如 http://127.0.0.1:8760）。仅当后端部署在别处时才需要填写。</small>
+        </label>
+        <label class="form-row form-row-inline">
+          <input type="checkbox" id="settingRequireApproval" checked>
+          <span>研究工作流需要人工审批后再执行</span>
+        </label>
+        <label class="form-row form-row-inline">
+          <input type="checkbox" id="settingOffline">
+          <span>离线模式（不访问外部学术数据库，仅使用本地知识库）</span>
+        </label>
+        <label class="form-row form-row-inline">
+          <input type="checkbox" id="settingDebug">
+          <span>输出调试日志到控制台</span>
+        </label>
+        <div class="form-row">
+          <span class="form-label">综述正文字数范围</span>
+          <div class="range-row">
+            <input id="settingReviewMin" class="input input-sm" type="number" min="800" max="40000" step="500" value="4000">
+            <span class="range-sep">—</span>
+            <input id="settingReviewMax" class="input input-sm" type="number" min="1000" max="40000" step="500" value="8000">
+            <span class="range-unit">字（不含参考文献）</span>
+          </div>
+          <p class="form-help" id="reviewCharsHelp">
+            越大写越久：本地 8B 模型约 45 token/s，1000 字约需 35 秒。
+            为给正文腾出上下文，材料块会自动裁剪，因此字数过大时可用文献会相应减少。
+          </p>
+        </div>
+
+        <div class="form-row">
+          <label class="form-row form-row-inline">
+            <input type="checkbox" id="settingLibraryEnabled">
+            <span>在文献卡片上显示「图书馆获取全文」按钮</span>
+          </label>
+          <p class="form-help">
+            这是订阅资源<b>唯一合规</b>的用法：只生成一个走学校链接解析器 / 校外访问代理的链接，
+            点开后用<b>你自己的会话</b>阅读，不下载、不抓取、不做批量获取。
+            复旦的校外访问方式见
+            <a href="https://library.fudan.edu.cn/e8/b5/c42805a518325/page.htm"
+               target="_blank" rel="noopener noreferrer">图书馆说明页</a>。
+          </p>
+          <label class="form-row">
+            <span class="form-label">显示名称</span>
+            <input id="settingLibraryName" class="input input-sm" type="text"
+                   placeholder="复旦大学图书馆" value="">
+          </label>
+          <label class="form-row">
+            <span class="form-label">链接解析器地址（OpenURL）</span>
+            <input id="settingLibraryOpenUrl" class="input input-sm" type="text"
+                   placeholder="https://sfx-xxxxx.hosted.exlibrisgroup.com.cn/sfx_local">
+            <span class="form-help">
+              填解析器基地址即可，会用标准 OpenURL 参数自动带上 DOI；
+              也可用 <code>{doi}</code> / <code>{url}</code> 占位符自定义。
+              获取方法：在图书馆点一次「Find it」/ 电子期刊导航，把问号前的地址复制过来。
+            </span>
+          </label>
+          <label class="form-row">
+            <span class="form-label">或：校外访问代理前缀</span>
+            <input id="settingLibraryProxy" class="input input-sm" type="text"
+                   placeholder="http://libproxy.fudan.edu.cn:8080/login?url=">
+            <span class="form-help">
+              没填解析器时用这个：会用 <code>前缀 + 原文链接</code> 打开。
+              解析器与代理二者填一个即可。
+            </span>
+          </label>
+        </div>
+        <div class="form-row">
+          <button type="button" class="btn btn-sm" id="settingResetLayout">恢复默认栏宽</button>
+        </div>
+      </div>
+
+      <div class="modal-pane" data-mpane="health">
+        <div id="healthDetail"><p class="empty-hint">加载中…</p></div>
+      </div>
+
+      <div class="modal-pane" data-mpane="maintenance">
+        <p class="form-help">为尚未生成向量的文献补齐嵌入，或重建全文索引。操作在后台执行，可能需要数分钟。</p>
+        <div class="maintain-grid">
+          <label class="form-row">
+            <span class="form-label">本次补齐数量</span>
+            <input id="maintainLimit" class="input input-sm" type="number" min="1" max="5000" step="50" value="200">
+          </label>
+          <div class="maintain-actions">
+            <button type="button" class="btn btn-sm" id="maintainEmbedBtn">
+              <svg class="ic ic-sm" aria-hidden="true"><use href="#i-database"></use></svg><span>补齐向量</span>
+            </button>
+            <button type="button" class="btn btn-sm" id="maintainFulltextBtn"
+                    title="为开放获取文献抓取全文并建立全文索引；非开放获取文献会被跳过">
+              <svg class="ic ic-sm" aria-hidden="true"><use href="#i-file"></use></svg><span>补齐全文</span>
+            </button>
+            <button type="button" class="btn btn-sm" id="maintainReindexBtn">
+              <svg class="ic ic-sm" aria-hidden="true"><use href="#i-refresh"></use></svg><span>重建索引</span>
+            </button>
+          </div>
+          <p class="form-help">
+            默认入库的是<b>元数据 + 摘要</b>，不含全文。点「补齐全文」可按需抓取
+            <b>开放获取</b>文献的全文（Europe PMC → PMC → OA PDF 三级回退），
+            非开放获取文献会被跳过，不会绕过付费墙。
+          </p>
+        </div>
+        <div class="maintain-log" id="maintainLog" hidden></div>
+      </div>
+    </div>
+
+    <footer class="modal-foot">
+      <span class="modal-footnote" id="settingsVersion"></span>
+      <button type="button" class="btn btn-sm btn-primary" id="settingsSaveBtn">保存并重新检测</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 轻提示容器 -->
+<div class="toast-stack" id="toastStack" aria-live="polite" aria-atomic="false"></div>
+
+<script src="./static/app.js" defer></script>
+</body>
+</html>

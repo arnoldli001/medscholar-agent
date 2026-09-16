@@ -1,0 +1,42 @@
+# 换行符策略 —— 不是洁癖，是 CI 能不能过的前提。
+#
+# 背景：`.bat` 必须是 CRLF（LF 会让 cmd 的 goto 与标签失效），
+# 而 CI 的 lint 作业跑在 **Linux** 上执行 scripts/check_bat.py。
+# 如果不显式声明，git 在 Windows 上按 autocrlf 把 .bat 归一化成 LF 存进仓库，
+# Linux 检出后就是 LF —— 守卫会在 CI 上失败，而本地却怎么都复现不出来。
+#
+# `text eol=crlf` 的语义：仓库内统一存 LF，**检出时任何平台都还原成 CRLF**。
+# 这正是我们要的：Windows 与 Linux 检出都拿到 CRLF 的 .bat。
+
+# 默认：交给 git 判断是否文本文件，并做换行归一化
+* text=auto
+
+# 批处理：任何平台检出都必须 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# PowerShell 在 Windows 上习惯 CRLF，但脚本兼容 LF；保持 CRLF 以免记事本显示成一行
+*.ps1 text eol=crlf
+
+# 二进制：绝不做换行转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.svg  text
+*.zip  binary
+*.db   binary
+*.pdf  binary
+*.woff binary
+*.woff2 binary
+
+# 语言统计：让 GitHub 不要把前端静态资源算成"其他"
+*.js   text
+*.css  text
+*.html text
+*.sql  text
+*.yml  text
+*.yaml text
+*.md   text

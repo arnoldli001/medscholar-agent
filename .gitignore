@@ -1,0 +1,27 @@
+# 数据与运行时（不纳入版本控制）
+data/
+.python/
+.venv/
+.cache/
+dist/
+
+# 本地配置与密钥
+config.yaml
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 临时日志
+*.log

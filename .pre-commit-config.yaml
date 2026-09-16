@@ -1,0 +1,59 @@
+# pre-commit：把"每次提交前必做"的检查固化下来，避免靠自觉。
+#
+# 安装（一次）：
+#     .python\python.exe -m pip install pre-commit
+#     .python\python.exe -m pre_commit install
+#
+# 手动全量跑一次：
+#     .python\python.exe -m pre_commit run --all-files
+#
+# 设计取舍：这里刻意**只放不改文件的检查**。
+# 自动修文件（ruff --fix、trailing-whitespace 之类）在一个已有 4 万行的仓库上
+# 第一次运行会产生巨量 diff，把真正要 review 的改动淹没。
+# 需要自动修复时手动执行对应命令即可，不必塞进提交钩子。
+
+default_language_version:
+  python: python3
+
+repos:
+  # --------------------------------------------------------------------- ruff
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        name: ruff（未定义名 / 语法类错误）
+        args: ["--select", "F,E9"]
+        types_or: [python, pyi]
+
+  # ------------------------------------------------- 通用文本与文件格式检查
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+        name: YAML 语法（配置文件模板）
+      - id: check-merge-conflict
+        name: 未解决的合并冲突标记
+      - id: check-added-large-files
+        name: 禁止提交大文件（模型、数据包、便携运行时）
+        args: ["--maxkb=2048"]
+      - id: mixed-line-ending
+        name: 换行符一致性（.bat 必须 CRLF）
+        # 只报告不修改；.bat 的 CRLF 由下面的专用钩子强校验
+        args: ["--fix=no"]
+
+  # ------------------------------------------- 项目特有约束：.bat 必须是 ASCII+CRLF
+  - repo: local
+    hooks:
+      - id: bat-ascii-crlf
+        name: .bat 必须纯 ASCII + CRLF（否则 cmd 会乱码/标签失效）
+        entry: python scripts/check_bat.py
+        language: system
+        files: \.(bat|cmd)$
+        pass_filenames: false
+
+      - id: medscholar-check
+        name: 语法 + 模块导入 + 纯函数断言（scripts/check.py）
+        entry: python scripts/check.py
+        language: system
+        files: ^(medscholar|scripts|tests)/.*\.py$
+        pass_filenames: false

@@ -1,0 +1,249 @@
+# ============================================================================
+#  MedScholar Agent 配置文件
+#
+#  使用方式：把本文件复制为 config.yaml 再修改（config.yaml 已在 .gitignore 中）
+#      copy config.example.yaml config.yaml
+#
+#  优先级：内置默认值 < config.yaml < 环境变量/.env
+#  所有字段都可省略，省略即使用默认值。
+# ============================================================================
+
+app_name: MedScholar Agent
+language: zh-CN
+
+# 离线模式：true 时完全不联网，只用本地知识库（本地 Ollama 仍可用）
+offline: false
+
+# 数据目录：数据库、全文缓存、导出文件都放这里。
+# 留空则使用「项目目录/data」；整包拷贝给朋友时数据会跟着走。
+data_dir: ""
+db_filename: medscholar.db
+
+# ---------------------------------------------------------------------------
+# 学术数据源
+#
+# 速率（rps = 每秒请求数）已按各 API 的公开限制设定，请勿随意调高：
+# 超限会被限流甚至暂时封禁。填写 API Key 可显著提升配额。
+# ---------------------------------------------------------------------------
+sources:
+  pubmed:
+    enabled: true
+    # 在 https://www.ncbi.nlm.nih.gov/account/settings/ 免费注册后获取
+    # 填写后速率自动从 3 次/秒 提升到 10 次/秒
+    api_key: ""
+    # NCBI 建议填写联系邮箱（polite pool，遇故障时他们会先联系你）
+    email: ""
+    rps: 3.0
+    page_size: 100
+    max_results: 100
+
+  europepmc:
+    enabled: true
+    rps: 8.0          # 官方约 10 次/秒，留出余量
+    page_size: 25
+    max_results: 100
+
+  semantic_scholar:
+    enabled: true
+    # 在 https://www.semanticscholar.org/product/api 免费申请
+    # 不填 Key 时限流很严（约 100 次/5 分钟），程序会自动降速，失败也不影响其他源
+    api_key: ""
+    rps: 0.3
+    retries: 2
+    backoff: 1.5
+
+  openalex:
+    enabled: true
+    # 注册 https://openalex.org/ 后可获取，配额提升 10 倍
+    api_key: ""
+    # 强烈建议填写邮箱：进入 polite pool，稳定性和速度都明显更好
+    email: ""
+    rps: 8.0
+
+  crossref:
+    enabled: true
+    # Crossref 建议填邮箱进入 polite pool
+    email: ""
+    rps: 5.0
+
+  arxiv:
+    enabled: true
+    rps: 0.33         # arXiv 官方要求每次请求间隔 ≥ 3 秒
+
+  cnki:
+    # ⚠️ 默认关闭。CNKI 公开检索页已改为前端 JS 渲染，服务端 HTML 不含文献条目，
+    #    其数据接口返回 403，因此无法在不引入浏览器渲染的前提下稳定获取。
+    #    中文文献请使用 OpenAlex（程序会自动附加 language:zh 检索）+ PubMed(chinese[la])。
+    #    图书馆订阅的 CNKI 请用「导出题录 → medscholar import」导入（合规，见文末说明）。
+    enabled: false
+    rps: 0.2
+    base_url: "https://search.cnki.com.cn/Search/Result"
+
+  unpaywall:
+    # 按 DOI 查**合法**开放获取副本；不参与关键词检索，只在取全文时用。
+    # 免费，但必须填 email（Unpaywall 用它识别调用方，不会发广告）。
+    # 库里那些"只有 DOI、没有 PMCID"的文献主要靠它拿到全文。
+    enabled: true
+    email: ""                 # ← 填上你的邮箱，例如 you@fudan.edu.cn
+    rps: 2.0
+
+  doaj:
+    # Directory of Open Access Journals：两万余种完全开放获取期刊。
+    # 补的是 PubMed 不收的 OA 期刊（综合/工程/社科），且全部能合法拿到全文。
+    # 免费，无需 key。
+    enabled: true
+    rps: 2.0
+
+  core:
+    # CORE 聚合全球机构库：学位论文、技术报告、作者自存档稿。
+    # 需要免费 API key（https://core.ac.uk/services/api）；没填 key 会自动跳过。
+    enabled: false
+    api_key: ""
+    rps: 1.0
+
+zotero:
+  # Zotero 数据目录（含 zotero.sqlite）。留空则自动探测 ~/Zotero 等常见位置。
+  # `medscholar zotero` 会读取它并索引你本地已有的 PDF —— 只读，不修改 Zotero。
+  data_dir: ""
+
+# ---------------------------------------------------------------------------
+# 向量嵌入
+#
+# provider:
+#   ollama                 —— 本地 Ollama（推荐，零成本离线）
+#   sentence-transformers  —— 本地 PubMedBERT（医学语义更强，但需装 torch 约 2GB）
+#   hashing                —— 纯 Python 哈希嵌入，仅供无模型环境冒烟测试，无语义能力
+#
+# 注意：更换 provider 或 model 会自动重建向量表，下次检索时重新嵌入。
+# ---------------------------------------------------------------------------
+embedding:
+  provider: ollama
+  model: nomic-embed-text:latest   # ollama pull nomic-embed-text
+  dim: 768                          # 须与模型实际维度一致
+  base_url: http://127.0.0.1:11434
+  batch_size: 16
+  timeout: 120.0
+  max_chars: 6000
+  auto_embed: true                  # 新文献入库后自动生成向量
+
+  # 想换医学专用模型时的两个选择：
+  #
+  # (A) 继续用 Ollama（体积小、开箱即用）
+  #     model: nomic-embed-text:latest
+  #
+  # (B) 用 PubMedBERT（医学语义更强，需 pip install sentence-transformers）
+  #     provider: sentence-transformers
+  #     model: neuml/pubmedbert-base-embeddings
+  #     dim: 768
+
+# ---------------------------------------------------------------------------
+# 推理模型
+#
+# provider:
+#   ollama              —— 本地（推荐，零成本可离线）
+#   deepseek            —— DeepSeek 云端 API（OpenAI 兼容，成本极低）
+#   openai-compatible   —— 任意 OpenAI 兼容端点（vLLM / One-API / 硅基流动 …）
+#
+# ⚠️ 常见错误：provider 与 model 必须属于同一套体系。
+#    把 Ollama 的模型名（qwen3:8b）配给云端 provider，云端会直接返回 HTTP 400。
+#    程序会检测这种不一致并给出可照做的中文提示，但仍请按下面示例配对填写。
+#
+# 环境变量里的 DEEPSEEK_API_KEY **不会**自动把 provider 切成 deepseek ——
+# 机器上别的项目设了这个变量是很常见的，静默切换后端只会造成莫名其妙的故障。
+# 想用云端，请显式改这里的 provider。
+# ---------------------------------------------------------------------------
+llm:
+  provider: ollama
+  model: qwen3:8b                   # ollama pull qwen3:8b
+  base_url: http://127.0.0.1:11434
+  api_key: ""
+  temperature: 0.3
+  top_p: 0.9
+  max_tokens: 3000
+  timeout: 600.0
+  think: false                      # Qwen3 等推理模型的思考链开关；关闭可显著提速
+  num_ctx: 8192
+
+  # 模型在显存里保留多久。Ollama 默认只有 5 分钟，超时就卸载；下次调用要重新
+  # 加载 —— 实测 8B 模型重新载入耗时 60~120 秒，比生成本身还慢。默认 30m。
+  # 显存充足（模型完全装得下）时可设 "-1" 常驻不卸载，最省时间。
+  keep_alive: 30m
+
+  # --- 可选：换成本地其它模型（都只需改 model 一行） -----------------------
+  #
+  # 想要更快的（生成速度约提升 2~3 倍，质量略降）：
+  #   model: qwen3.5:4b          # 3.2 GB
+  #   model: llama3.2:3b         # 1.9 GB
+  #
+  # 想要更好的中文书面表达（推荐，非思考模型，输出更稳）：
+  #   model: qwen2.5:7b          # 4.7 GB，需先 ollama pull qwen2.5:7b
+  #
+  # 想要另一种模型家族（换换口味 / 避免与其它项目抢同一个模型）：
+  #   model: glm4:9b             # 5.5 GB，智谱，中文能力强
+  #
+  # 换完模型后无需其它操作，直接重启即可；嵌入模型不受影响。
+
+  # --- 可选：改用云端 DeepSeek（实测快一个数量级，质量也更好） -------------
+  #
+  # provider / model / base_url 三者必须配套改，不要把 Ollama 的模型名填进来。
+  #
+  # ⚠️ deepseek 的模型都是**推理模型**：思维链与正文共用 max_tokens 配额。
+  #    实测 max_tokens=500 时正文会被思考过程吃光、返回空字符串（程序会报错提示，
+  #    不会静默产出空稿）。用云端时请把 max_tokens 调到 4000 以上。
+  #
+  #   provider: deepseek
+  #   model: deepseek-flash            # 快（实测 137 tok/s），推荐日常使用
+  #   base_url: https://api.deepseek.com/v1
+  #   api_key: sk-xxxxxxxx             # 也可用环境变量 DEEPSEEK_API_KEY
+  #   max_tokens: 4000                 # 推理模型必须给足
+  #
+  # 两个可选模型（用 GET /v1/models 实测确认）：
+  #   deepseek-flash    快，适合综述正文、摘要、速读笔记等大批量生成
+  #   deepseek-v4-pro   更强但慢且更费 token，适合规划与批判性评估这类需要深想的环节
+
+# ---------------------------------------------------------------------------
+# 混合检索
+#
+# 召回 = FTS5 BM25（关键词） + sqlite-vec KNN（语义） → RRF 融合（k=60）
+# ---------------------------------------------------------------------------
+retrieval:
+  rrf_k: 60                # RRF 融合常数，论文推荐 60，一般不需要改
+  fts_candidates: 100      # BM25 召回条数
+  vector_candidates: 100   # 向量召回条数
+  top_k: 20                # 融合后返回条数
+  min_score: 0.0
+  # BM25 列权重：标题命中远比其他字段重要
+  bm25_weights:
+    title: 8.0
+    mesh_terms: 3.0
+    keywords: 3.0
+    abstract: 1.0
+    authors: 0.5
+    journal: 0.5
+
+# ---------------------------------------------------------------------------
+# Agent 工作流
+# ---------------------------------------------------------------------------
+agent:
+  require_approval: true    # Plan 后暂停等待你确认（需求要求的"人类审批节点"）
+  max_papers_per_source: 30
+  writer_max_papers: 25     # 送入写作上下文的文献上限（受模型上下文限制）
+  # 交给 LLM 逐篇点评的文献数上限。其余文献仍由离线启发式评估，两者等权融合。
+  # ⚠️ 性能提示：本地 8B 模型在纯 CPU 上约 7 tokens/s。逐篇点评 25 篇需要
+  #    生成上千 token，会耗掉好几分钟。想更快就把这个值调到 6~8。
+  critique_max_papers: 12
+  context_char_budget: 24000
+  warm_fulltext: true       # 为开放获取文献预取全文，写作质量更高
+  fulltext_top_n: 4         # 预取全文的篇数（抓取较慢，不宜过多）
+  auto_revise: true         # 自我审查发现问题后自动修订一轮
+  max_revise_rounds: 1
+  review_min_chars: 4000    # 综述正文目标字数下限（不含参考文献）
+  review_max_chars: 8000    # 上限。字数越大越慢：1000 字约需 35 秒（本地 8B）
+
+# ---------------------------------------------------------------------------
+# Web 服务
+# ---------------------------------------------------------------------------
+server:
+  host: 127.0.0.1
+  port: 8760
+  open_browser: true
