@@ -10,8 +10,9 @@
 
 | | |
 |---|---|
-| 语言/规模 | Python 15.9k 行 · 原生 JS 4.2k 行 · 测试 4.6k 行 |
-| 测试 | **608 个测试**，CI 全绿（5 个作业：lint / test / smoke / package / test-linux）；`ruff` 零告警 |
+| 语言/规模 | Python 16.4k 行 · 原生 JS 4.2k 行 · 测试 5.2k 行 |
+| 测试 | **687 个测试**，CI 全绿（**6 个作业**：lint / test / **eval** / smoke / package / test-linux） |
+| 检索评测 | recall@k · nDCG@k · MRR · MAP + 7 种配置消融 + 阴性对照；**每次 CI 跑门禁** |
 | 后端 | FastAPI + uvicorn（异步）· Pydantic v2 · httpx |
 | 存储 | SQLite（16 张表 + 2 张 FTS5 虚拟表）· sqlite-vec · 单文件、可整目录拷走 |
 | 检索 | FTS5 BM25 ⊕ sqlite-vec KNN → RRF(k=60) · 中文字符级切分 |
@@ -21,6 +22,7 @@
 
 **先看这几份文档**：架构深挖与选型理由见本文
 [关键设计决策](#关键设计决策选型与权衡) 与 [深水区问题](#深水区问题与解决)；
+**检索质量怎么量化**见 [`docs/EVALUATION.md`](docs/EVALUATION.md)；
 面试问答准备见 [`docs/INTERVIEW-FAQ.md`](docs/INTERVIEW-FAQ.md)；
 HTTP 契约见 [`docs/API.md`](docs/API.md)。
 
@@ -222,6 +224,47 @@ RTX 4060 显存带宽 272 GB/s ÷ 模型 6.19 GB ≈ **44 tok/s 理论上限**�
 | 综述正文篇幅 | 默认目标 **4000~8000 字**（可配置 800~40000）；实测单节 1192 字（默认档）/2195 字（大字数档） |
 | 引用一致性 | 正文 `[n]` 与参考文献表严格一一对应，越界引用被自动剔除 |
 | 数字溯源 | 论文模块逐数字校验出处，无法溯源的单独列出 |
+
+### 检索质量：从"感觉准了"到可复现的数字
+
+```bat
+:: CI 同款：确定性离线回归 + 阈值门禁（秒级，不需要 Ollama）
+.python\python.exe scripts\eval_retrieval.py --dataset regression --k 10 --embed-provider hashing --check
+
+:: 本机真实评测：在你自己的库上跑（需要 Ollama）
+.python\python.exe scripts\eval_retrieval.py --from-library --limit 60 --k 10 --mode title-terms
+```
+
+指标是 `recall@k` / `precision@k` / `MRR` / `MAP` / `nDCG@k`，配 7 种配置的消融矩阵。
+方法论、偏差说明与"这个评测不能证明什么"见 [`docs/EVALUATION.md`](docs/EVALUATION.md)。
+
+**实测结果（本地库 60 篇真实文献，`nomic-embed-text`，title-terms 查询，@10）**：
+
+| 配置 | recall@10 | nDCG@10 | MRR | 相对 BM25 |
+|---|---|---|---|---|
+| bm25-only | 1.0000 | 0.9754 | 0.9667 | — |
+| vector-only | 1.0000 | 0.8967 | 0.8611 | **−7.9pt nDCG** |
+| production（RRF k=60） | 1.0000 | 0.9815 | 0.9750 | **+0.6pt nDCG** |
+| weighted-fts2（BM25 权重 ×2） | **1.0000** | **0.9877** | **0.9833** | **+1.2pt nDCG** |
+
+**这张表说了三件事，其中两件是对项目自身的批评**：
+
+1. **融合确实优于单路** —— production 好过 bm25-only 与 vector-only。
+   这是"BM25 ⊕ 向量 → RRF"有效果的**第一次量化证据**（此前只有原理判断）。
+2. **向量单路明显弱于 BM25**（nDCG −7.9pt）：语料是英文医学文献、查询由标题派生，
+   词面重叠仍然偏高，所以语义路拿不到便宜。**说明"上向量检索总是更好"是错的**。
+3. **recall@10 全部饱和在 1.0，没有区分度** —— 60 篇语料下 top-10 基本覆盖全部相关文献。
+   结论：**小语料上应该看 nDCG/MRR，不要看 recall**。
+
+同一套指标还抓出了两个"数据集本身不合格"的事实（都已固化为测试）：
+`known-item` 模式下 BM25 直接满分 1.0（查询就是标题，评测无法区分配置）；
+以及**小语料上改 `rrf_k` 完全不改变排序**（k 只是对 `1/(k+rank)` 做单调缩放）——
+所以"调 k"必须在真实规模的库上做。
+
+**阴性对照**：一条故意无关的查询（量子色动力学）在语料中确无相关文献，
+生产配置平均仍返回 **10.0 条**（= top_k）。这暴露了一个必须显式盯住的系统特性：
+**RRF 融合天然总会给出答案，没有"我不知道"的出口** ——
+所以单靠检索层无法拒绝无关问题，必须由下游的引用越界剔除与数字溯源校验兜住。
 
 ---
 
@@ -692,12 +735,13 @@ medscholar-agent/
 .python\python.exe -X utf8 scripts\smoke_http.py    :: 71 项真实 uvicorn 端到端
 ```
 
-### CI（GitHub Actions，5 个作业）
+### CI（GitHub Actions，6 个作业）
 
 | 作业 | 平台 | 内容 |
 |---|---|---|
 | `lint` | ubuntu | `ruff`(F,E9) + `compileall` + `check.py` + `check_bat.py` |
-| `test` | windows / 3.13 | 608 个测试（与随包便携运行时同版本，保证"CI 绿 = 用户能用"） |
+| `test` | windows / 3.13 | 687 个测试（与随包便携运行时同版本，保证"CI 绿 = 用户能用"） |
+| **`eval`** | ubuntu | **检索质量回归**：消融评测 + 阈值门禁 + 与 `hybrid_search` 的一致性自检 |
 | `smoke` | windows | 真实 uvicorn，逐条核对 `docs/API.md`（离线、不联网） |
 | `package` | windows | 打包回归 + 断言分享包**不含 `data/`**（合规） |
 | `test-linux` | ubuntu | 实验性（`continue-on-error`）——README 已声明 Linux 未验证 |
@@ -709,6 +753,11 @@ medscholar-agent/
 .python\python.exe -m pip install pre-commit
 .python\python.exe -m pre_commit install
 ```
+
+**`eval` 作业为什么用哈希嵌入而不是真实模型**：CI 里装几 GB 的嵌入模型既慢又不稳定，
+一旦因为环境问题频繁红掉，大家就会开始习惯性忽略它。所以 CI 只做**确定性回归**
+（指标与融合逻辑有没有被改坏），真实语义质量在本机用 `--from-library` 测。
+这两件事刻意分开，混为一谈就会得出虚假结论。
 
 **CI 第一次跑就抓到了真回归**：`smoke_http.py` 里写死了"7 个数据源"，
 而我刚加了 DOAJ/CORE（共 9 个）——本地测试全绿、只有这条契约检查失败。
@@ -752,7 +801,7 @@ medscholar-agent/
 
 | 局限 | 具体表现 | 影响 |
 |---|---|---|
-| **没有 RAG 评估体系** | 只有 `search_logs` 里的耗时与命中数，没有 `recall@k`/`nDCG`/幻觉率指标 | 检索调优靠经验，无法证明"变好了"；这是最该补的一块 |
+| **检索评测只到文献级** | 有 recall@k / nDCG / MRR，但没有 **claim-level 忠实度**（`[n]` 是否真的支持那句话） | 引用"存在性"可查，"支持性"不可查；需要 NLI/LLM 逐句核验 |
 | **没有端到端可观测性** | 有 LLM 分段耗时日志，但没有 trace、token/成本核算、失败分类 | 线上问题定位靠翻日志 |
 | **单进程、单写者** | agent 跑在 `asyncio.create_task`；SQLite 单写 | 进程崩溃丢当前阶段的中间结果；不能水平扩展 |
 | **无鉴权与多租户** | REST 全开放，无用户隔离、配额、审计 | 仅适合单机个人使用 |
@@ -763,18 +812,20 @@ medscholar-agent/
 
 ### 路线图（按投入产出排序）
 
-1. ~~**CI + pre-commit**~~ ✅ **已完成**——5 个作业覆盖 lint / test / smoke / package，
-   并加了 `.bat` 换行符守卫与 `.gitattributes`（详见[测试与工程质量](#测试与工程质量)）。
-2. **RAG 评估集**（2~3 天）—— 人工标注 50~100 个"问题 + 应命中的 golden 文献"，
-   实现 `recall@k` / `nDCG` / `MRR` 与**引用忠实度**（claim 是否能被所引文献支持），
-   并做成每次改动可回归的脚本。**这是从"个人项目"跨到"生产系统"的关键一步。**
-3. **可观测性**（2 天）—— OpenTelemetry 打点 + 每次运行的可视化 trace + token/成本核算 + 失败分类。
-4. **容器化 + schema 迁移**（1~2 天）—— Dockerfile 固化环境；Alembic 或轻量迁移表。
-5. **横向扩展**（1 周）—— PostgreSQL + pgvector、任务队列（Arq/Temporal）、无状态服务、语义缓存。
-6. **检索质量**（2~3 天）—— cross-encoder 重排、query 改写、chunk 策略消融实验。
-7. **领域专业度**（持续）—— claim-evidence 逐句对齐、GRADE 证据分级、
+1. ~~**CI + pre-commit**~~ ✅ **已完成**——6 个作业，含检索质量门禁与 `.bat` 换行符守卫。
+2. ~~**RAG 评估体系**~~ ✅ **已完成**——指标 + 消融 + 阴性对照 + CI 门禁，
+   方法论与偏差说明见 [`docs/EVALUATION.md`](docs/EVALUATION.md)。
+   下一步是补 **claim-level 忠实度**（下面第 3 项）。
+3. **引用忠实度**（2~3 天）—— 用 NLI 模型或 LLM 逐句核验"这句话是否被所引文献支持"，
+   把现在的"引用存在性校验"升级为"引用支持性校验"。
+4. **可观测性**（2 天）—— OpenTelemetry 打点 + 每次运行的可视化 trace + token/成本核算 + 失败分类。
+5. **容器化 + schema 迁移**（1~2 天）—— Dockerfile 固化环境；Alembic 或轻量迁移表。
+6. **横向扩展**（1 周）—— PostgreSQL + pgvector、任务队列（Arq/Temporal）、无状态服务、语义缓存。
+7. **检索质量提升**（2~3 天）—— cross-encoder 重排、query 改写、chunk 策略消融。
+   评测框架已就位，因此每一项都能立刻给出"涨了多少"的数字。
+8. **领域专业度**（持续）—— claim-evidence 逐句对齐、GRADE 证据分级、
    PRISMA/CONSORT/STROBE 报告规范检查、统计报告一致性校验。
-8. **记忆升级**—— 从"单条纠错记忆"扩展到长期研究记忆（跨会话课题上下文、期刊/审稿人偏好）。
+9. **记忆升级**—— 从"单条纠错记忆"扩展到长期研究记忆（跨会话课题上下文、期刊/审稿人偏好）。
 
 ---
 

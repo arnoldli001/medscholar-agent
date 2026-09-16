@@ -53,7 +53,16 @@ medscholar = "medscholar.cli:main"
 include = ["medscholar*"]
 
 [tool.setuptools.package-data]
-medscholar = ["db/*.sql", "web/*.html", "web/*.js", "web/*.css", "web/*.svg", "web/*.ico"]
+medscholar = [
+    "db/*.sql",
+    "web/*.html",
+    "web/*.js",
+    "web/*.css",
+    "web/*.svg",
+    "web/*.ico",
+    "eval/datasets/*.json",
+    "eval/datasets/*.jsonl",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

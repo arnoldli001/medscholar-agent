@@ -25,3 +25,7 @@ build/
 
 # 临时日志
 *.log
+
+# 本机生成的评测数据集（由本地真实库派生，不入版本控制）
+/eval/
+eval-report.json

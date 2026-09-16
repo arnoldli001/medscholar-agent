@@ -11,11 +11,17 @@
 | 脚本 | 用途 | 是否需要网络 |
 |---|---|---|
 | `check.py` | 静态自检：语法编译 + 模块导入 + 关键纯函数断言。**改完代码先跑这个** | 否 |
+| `check_bat.py` | 校验 `.bat` 为纯 ASCII + CRLF（CI 与 pre-commit 都用它守这条约定） | 否 |
 | `smoke_db.py` | 数据层冒烟：建库 → 入库 → BM25/向量/混合检索 → 统计 | 否 |
 | `smoke_api.py` | 数据源联调：逐源真实请求并打印诊断（解析结构变了会立刻暴露） | 是 |
 | `smoke_http.py` | HTTP 契约测试（71 项）：全部端点 + SSE + 人工审批往返 | 否 |
+| `eval_retrieval.py` | **检索质量评测**：recall@k/nDCG/MRR 消融实验 + 阈值门禁。`--embed-provider hashing` 为 CI 确定性模式，`--from-library` 为真实评测 | 视模式而定 |
+| `build_golden.py` | 从本地库生成**候选**评测集（人工筛选后使用）。三种模式偏差递减：`known-item` / `title-terms` / `llm-question` | LLM 模式需要 |
 | `e2e.py` | 端到端：真实检索 → 嵌入 → 混合检索 → 完整 Agent 工作流 → 成稿 | 是 + 需 Ollama |
 | `pack_share.py` | 打包分享包到 `dist/` | 否 |
+
+> 评测的用法与方法论（含"这个评测不能证明什么"）见
+> [`docs/EVALUATION.md`](../docs/EVALUATION.md)。
 
 ```bat
 :: 推荐顺序
