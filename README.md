@@ -2,6 +2,8 @@
 
 **面向医学研究者的本地化学术智能体** — 自动检索文献、构建本地可语义检索的知识库、辅助综述与论文写作、并把用户的反馈变成系统的长期记忆。
 
+[![CI](https://github.com/arnoldli001/medscholar-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/arnoldli001/medscholar-agent/actions/workflows/ci.yml)
+
 > 一句话概括工程目标：**让「AI 辅助写作」在医学场景下可信、可审计、可复现。**
 > 医学写作的失败代价是学术不端，所以这个项目的重点不在"生成得多漂亮"，
 > 而在**幻觉治理**：引用必须对得上、数字必须有出处、错误必须被记住。
@@ -9,7 +11,7 @@
 | | |
 |---|---|
 | 语言/规模 | Python 15.9k 行 · 原生 JS 4.2k 行 · 测试 4.6k 行 |
-| 测试 | **608 个测试全绿**，`ruff` 零告警，`scripts/check.py` 全通过 |
+| 测试 | **608 个测试**，CI 全绿（5 个作业：lint / test / smoke / package / test-linux）；`ruff` 零告警 |
 | 后端 | FastAPI + uvicorn（异步）· Pydantic v2 · httpx |
 | 存储 | SQLite（16 张表 + 2 张 FTS5 虚拟表）· sqlite-vec · 单文件、可整目录拷走 |
 | 检索 | FTS5 BM25 ⊕ sqlite-vec KNN → RRF(k=60) · 中文字符级切分 |
@@ -686,8 +688,40 @@ medscholar-agent/
 ```bat
 .python\python.exe -m pytest tests -q               :: 608 个测试
 .python\python.exe scripts\check.py                 :: 语法 + 模块导入 + 纯函数断言
+.python\python.exe scripts\check_bat.py             :: .bat 必须纯 ASCII + CRLF
 .python\python.exe -X utf8 scripts\smoke_http.py    :: 71 项真实 uvicorn 端到端
 ```
+
+### CI（GitHub Actions，5 个作业）
+
+| 作业 | 平台 | 内容 |
+|---|---|---|
+| `lint` | ubuntu | `ruff`(F,E9) + `compileall` + `check.py` + `check_bat.py` |
+| `test` | windows / 3.13 | 608 个测试（与随包便携运行时同版本，保证"CI 绿 = 用户能用"） |
+| `smoke` | windows | 真实 uvicorn，逐条核对 `docs/API.md`（离线、不联网） |
+| `package` | windows | 打包回归 + 断言分享包**不含 `data/`**（合规） |
+| `test-linux` | ubuntu | 实验性（`continue-on-error`）——README 已声明 Linux 未验证 |
+
+配置见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
+提交前门禁见 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)：
+
+```bat
+.python\python.exe -m pip install pre-commit
+.python\python.exe -m pre_commit install
+```
+
+**CI 第一次跑就抓到了真回归**：`smoke_http.py` 里写死了"7 个数据源"，
+而我刚加了 DOAJ/CORE（共 9 个）——本地测试全绿、只有这条契约检查失败。
+已改为断言"必需数据源集合齐全"，新增源不再误报、移除源仍会被抓住。
+
+### 换行符策略（`core.autocrlf` 的一个真实陷阱）
+
+本机 `core.autocrlf=true`，会把 `.bat` 归一化成 **LF 存进仓库**；
+而 `lint` 作业跑在 **Linux** 上执行 `check_bat.py`，检出后就是 LF → **CI 必然失败，且本地怎么都复现不出来**。
+
+[`.gitattributes`](.gitattributes) 用 `*.bat text eol=crlf` 固定语义：
+**仓库存 LF、任何平台检出都还原 CRLF**。可用 `git ls-files --eol run.bat` 验证：
+`i/lf  w/crlf  attr/text eol=crlf`。
 
 **测试策略**（不是"为了覆盖率写测试"）：
 
@@ -702,10 +736,11 @@ medscholar-agent/
   GBK 编码的导出文件、`example.com` 邮箱，都要有明确的降级行为而不是崩溃。
 
 **已建立的工程习惯**：`compileall` + `ruff`（F/E9）+ `check.py` 三件套、
-每个新模块配套测试、`.bat` 纯 ASCII+CRLF 约定、
-静态资源 mtime 版本号、配置与代码同步（`config.example.yaml` 是唯一文档源）。
+每个新模块配套测试、`.bat` 纯 ASCII+CRLF 约定（已有守卫脚本强制）、
+静态资源 mtime 版本号、配置与代码同步（`config.example.yaml` 是唯一文档源）、
+**CI 五作业 + pre-commit 提交门禁**。
 
-**尚未建立的**：CI、容器化、pre-commit、schema 迁移工具（见下节路线图第 1 项）。
+**尚未建立的**：容器化、schema 迁移工具（见下节路线图）。
 
 ---
 
@@ -723,22 +758,23 @@ medscholar-agent/
 | **无鉴权与多租户** | REST 全开放，无用户隔离、配额、审计 | 仅适合单机个人使用 |
 | **检索较基础** | 无 cross-encoder 重排、无 query 改写/HyDE、无多跳 | 复杂查询的召回还有提升空间 |
 | **无 prompt 版本管理 / A-B 实验** | 提示词是代码里的常量 | 改提示词无法灰度、无法归因 |
-| **无 CI / 无容器** | 608 个测试靠手动跑 | 协作与部署规范性不足 |
+| **无容器化 / 无 schema 迁移** | 靠 `CREATE TABLE IF NOT EXISTS`，改列会痛 | 部署与演进规范性不足 |
 | **CNKI 不可用** | 公开检索页改为 JS 渲染、接口 403 | 中文文献主要靠 OpenAlex + 题录导入覆盖 |
 
 ### 路线图（按投入产出排序）
 
-1. **CI + 容器化**（0.5~1 天）—— GitHub Actions 跑测试与 lint；Dockerfile 固化环境。
-   边际收益最高：608 个测试目前没有被持续执行。
+1. ~~**CI + pre-commit**~~ ✅ **已完成**——5 个作业覆盖 lint / test / smoke / package，
+   并加了 `.bat` 换行符守卫与 `.gitattributes`（详见[测试与工程质量](#测试与工程质量)）。
 2. **RAG 评估集**（2~3 天）—— 人工标注 50~100 个"问题 + 应命中的 golden 文献"，
    实现 `recall@k` / `nDCG` / `MRR` 与**引用忠实度**（claim 是否能被所引文献支持），
    并做成每次改动可回归的脚本。**这是从"个人项目"跨到"生产系统"的关键一步。**
 3. **可观测性**（2 天）—— OpenTelemetry 打点 + 每次运行的可视化 trace + token/成本核算 + 失败分类。
-4. **横向扩展**（1 周）—— PostgreSQL + pgvector、任务队列（Arq/Temporal）、无状态服务、语义缓存。
-5. **检索质量**（2~3 天）—— cross-encoder 重排、query 改写、chunk 策略消融实验。
-6. **领域专业度**（持续）—— claim-evidence 逐句对齐、GRADE 证据分级、
+4. **容器化 + schema 迁移**（1~2 天）—— Dockerfile 固化环境；Alembic 或轻量迁移表。
+5. **横向扩展**（1 周）—— PostgreSQL + pgvector、任务队列（Arq/Temporal）、无状态服务、语义缓存。
+6. **检索质量**（2~3 天）—— cross-encoder 重排、query 改写、chunk 策略消融实验。
+7. **领域专业度**（持续）—— claim-evidence 逐句对齐、GRADE 证据分级、
    PRISMA/CONSORT/STROBE 报告规范检查、统计报告一致性校验。
-7. **记忆升级**—— 从"单条纠错记忆"扩展到长期研究记忆（跨会话课题上下文、期刊/审稿人偏好）。
+8. **记忆升级**—— 从"单条纠错记忆"扩展到长期研究记忆（跨会话课题上下文、期刊/审稿人偏好）。
 
 ---
 
