@@ -1,0 +1,252 @@
+{
+  "name": "faithfulness-labelled",
+  "description": "引用支持性校验的标注集：用于衡量校验器本身准不准（evaluate the evaluator）。",
+  "provenance": "**由本项目作者人工编写**，条目都是边界清晰的构造案例，因此它验证的是「规则在无歧义案例上是否可靠」，**不能**据此声称达到人类一致水平。语料为编写内容，非真实出版文本。\n\n设计约定（重要）：\n1. **同字符体系的案例**才用来检验规则判定 —— 中文论断配中文文献、英文论断配英文文献；\n2. **跨语言的案例**（中文论断配英文文献，这是中文综述的常态）标注为 `unverifiable`：Tier 0 的词面代理指标在跨语言对上**没有任何信号**，此时必须 abstain，而不是指控它引错了文献。这类判断需要 Tier 1。\n3. 多条规则同时命中时按**仲裁顺序**（numbers/existence > direction > overclaim > grounding > unverifiable）取最可执行的一条，这是明确的设计决定，不是掩盖漏报。\n4. 特意保留了 2 条**同语言语义改写**案例：它们应当被判 supported，但词面重合度低，Tier 0 会误报 —— 用来如实度量代理指标的固有盲区。",
+  "cases": [
+    {
+      "id": "contra-zh-1",
+      "claim": "该疗法可完全治愈卒中后抑郁 [3]。",
+      "citations": [3],
+      "sources": {"3": "两组 HAMD 评分差异无统计学意义，未发现该疗法优于对照组。"},
+      "gold": "contradicted",
+      "expected_rule": "direction",
+      "note": "中文阴性表述 vs 中文强主张（同语言，规则应当命中）"
+    },
+    {
+      "id": "contra-zh-2",
+      "claim": "本研究证实针刺治疗失眠疗效确切 [5]。",
+      "citations": [5],
+      "sources": {"5": "针刺组与假针刺组的匹兹堡睡眠质量指数无显著差异。"},
+      "gold": "contradicted",
+      "expected_rule": "direction",
+      "note": "无显著差异 + 证实"
+    },
+    {
+      "id": "contra-zh-3",
+      "claim": "加速rTMS显著优于常规rTMS治疗卒中后抑郁 [30]。",
+      "citations": [30],
+      "sources": {"30": "加速rTMS组与常规rTMS组的 HAMD 评分下降幅度无显著差异，未发现加速方案更优。"},
+      "gold": "contradicted",
+      "expected_rule": "direction",
+      "note": "rTMS 缩写也让共同主题词非空"
+    },
+    {
+      "id": "contra-en-1",
+      "claim": "Accelerated rTMS was superior to conventional rTMS for post-stroke depression [1].",
+      "citations": [1],
+      "sources": {"1": "We randomized 120 patients to accelerated rTMS or conventional rTMS for post-stroke depression. There was no significant difference in HAMD reduction between the two groups."},
+      "gold": "contradicted",
+      "expected_rule": "direction",
+      "note": "被引文献明确写无显著差异，论断却说 superior"
+    },
+    {
+      "id": "contra-en-2",
+      "claim": "This treatment was superior to placebo for reducing depressive symptoms [2].",
+      "citations": [2],
+      "sources": {"2": "In this trial of depressive symptoms the intervention failed to show benefit over placebo on the primary outcome."},
+      "gold": "contradicted",
+      "expected_rule": "direction",
+      "note": "failed to show benefit 与 superior to 方向相反"
+    },
+    {
+      "id": "contra-en-3",
+      "claim": "The drug significantly improved cognitive outcomes after stroke [4].",
+      "citations": [4],
+      "sources": {"4": "Cognitive outcomes after stroke did not differ between groups receiving the drug or placebo."},
+      "gold": "contradicted",
+      "expected_rule": "direction",
+      "note": "did not differ"
+    },
+    {
+      "id": "numbers-zh-1",
+      "claim": "该研究纳入 9999 例患者，随访 5 年 [8]。",
+      "citations": [8],
+      "sources": {"8": "本研究纳入 120 例患者，随访 4 周。"},
+      "gold": "unsupported",
+      "expected_rule": "numbers",
+      "note": "样本量与随访时长都是编造的（同语言）"
+    },
+    {
+      "id": "numbers-zh-2",
+      "claim": "治疗后 HAMD 评分下降 12.5 分，两组差异有统计学意义（P<0.001）[7]。",
+      "citations": [7],
+      "sources": {"7": "治疗后 HAMD 评分下降 9.8 分，两组差异无统计学意义。"},
+      "gold": "unsupported",
+      "expected_rule": "numbers",
+      "note": "12.5 与 P<0.001 在被引文献中都不存在"
+    },
+    {
+      "id": "numbers-en-1",
+      "claim": "The response rate was 78% in the active arm [10].",
+      "citations": [10],
+      "sources": {"10": "Response was achieved in 45% of patients receiving active treatment."},
+      "gold": "unsupported",
+      "expected_rule": "numbers",
+      "note": "78% vs 45%"
+    },
+    {
+      "id": "numbers-en-2",
+      "claim": "Adverse events occurred in 0.3% of sessions [9].",
+      "citations": [9],
+      "sources": {"9": "Adverse events were reported in 12% of sessions, mostly headache."},
+      "gold": "unsupported",
+      "expected_rule": "numbers",
+      "note": "0.3% 无出处"
+    },
+    {
+      "id": "overclaim-zh-1",
+      "claim": "本方案可彻底根治卒中后抑郁，值得全面推广 [11]。",
+      "citations": [11],
+      "sources": {"11": "加速rTMS治疗卒中后抑郁的随机对照试验研究方案，目前正在招募受试者。"},
+      "gold": "overclaim",
+      "expected_rule": "overclaim",
+      "note": "研究方案（弱载体）+ 根治/彻底"
+    },
+    {
+      "id": "overclaim-en-1",
+      "claim": "This finding definitively proves the mechanism of action [12].",
+      "citations": [12],
+      "sources": {"12": "A pilot study in 8 healthy volunteers exploring cortical excitability. Preliminary results on the mechanism of action."},
+      "gold": "overclaim",
+      "expected_rule": "overclaim",
+      "note": "pilot study + definitively proves"
+    },
+    {
+      "id": "overclaim-zh-2",
+      "claim": "该药治愈率高达 100%，无任何不良反应 [13]。",
+      "citations": [13],
+      "sources": {"13": "病例报告：1 例患者用药后症状缓解，需进一步验证。"},
+      "gold": "overclaim",
+      "expected_rule": "overclaim",
+      "note": "**多规则命中**：numbers(100 找不到)、overclaim、grounding 都会触发。按仲裁顺序 numbers 最优先，因此预测为 unsupported —— 这是刻意记录的设计决定，不是漏报"
+    },
+    {
+      "id": "grounding-zh-1",
+      "claim": "针灸可以降低血压并改善胰岛素抵抗 [14]。",
+      "citations": [14],
+      "sources": {"14": "本文综述了经颅磁刺激线圈设计与电场建模方法。"},
+      "gold": "unsupported",
+      "expected_rule": "grounding",
+      "note": "引用了完全不相关的文献（同语言）"
+    },
+    {
+      "id": "grounding-en-1",
+      "claim": "The vaccine reduced mortality in elderly nursing home residents [15].",
+      "citations": [15],
+      "sources": {"15": "We report a systematic review of physiotherapy dosing after total knee replacement."},
+      "gold": "unsupported",
+      "expected_rule": "grounding",
+      "note": "主题完全无关（同语言）"
+    },
+    {
+      "id": "ok-zh-1",
+      "claim": "卒中后抑郁在卒中幸存者中的发生率约为 30% [16]。",
+      "citations": [16],
+      "sources": {"16": "卒中后抑郁影响约 30% 的卒中幸存者，并与更差的功能恢复相关。"},
+      "gold": "supported",
+      "expected_rule": null,
+      "note": "数字与主题都能对上，不应报警"
+    },
+    {
+      "id": "ok-zh-2",
+      "claim": "指南推荐左背外侧前额叶高频 rTMS 用于治疗抑郁症 [18]。",
+      "citations": [18],
+      "sources": {"18": "循证指南推荐对左背外侧前额叶实施高频重复经颅磁刺激以治疗抑郁症。"},
+      "gold": "supported",
+      "expected_rule": null,
+      "note": "同语言，实词重合充分"
+    },
+    {
+      "id": "ok-zh-3",
+      "claim": "加速rTMS与常规rTMS在安全性方面相似，常见不良反应为头痛 [19]。",
+      "citations": [19],
+      "sources": {"19": "加速rTMS的安全性特征与常规rTMS相似，最常见的不良反应为头痛。"},
+      "gold": "supported",
+      "expected_rule": null,
+      "note": "「相似」不是强主张，且被引文献里也没有阴性结果表述，不应被 overclaim 或 direction 误伤"
+    },
+    {
+      "id": "ok-en-1",
+      "claim": "HAMD scores decreased by 12.5 points after treatment (P<0.001) [17].",
+      "citations": [17],
+      "sources": {"17": "HAMD-17 scores decreased by 12.5 points from baseline to week 4 (P<0.001) in the active group."},
+      "gold": "supported",
+      "expected_rule": null,
+      "note": "数字完全一致，不应触发 numbers"
+    },
+    {
+      "id": "ok-en-strong-but-supported",
+      "claim": "This trial proves that accelerated rTMS significantly improves HAMD scores in post-stroke depression [20].",
+      "citations": [20],
+      "sources": {"20": "In this randomized controlled trial, accelerated rTMS significantly improved HAMD scores compared with sham in patients with post-stroke depression (P=0.003)."},
+      "gold": "supported",
+      "expected_rule": null,
+      "note": "**重要负例**：强主张 + 强证据（RCT），不应被判 overclaim —— 规则必须能区分「强主张配强证据」与「强主张配弱载体」"
+    },
+    {
+      "id": "paraphrase-zh-1",
+      "claim": "神经调控手段对卒中后情绪障碍具有改善作用 [21]。",
+      "citations": [21],
+      "sources": {"21": "加速重复经颅磁刺激降低了抑郁症状的严重程度。"},
+      "gold": "supported",
+      "expected_rule": null,
+      "note": "**已知盲区（代理指标会误报）**：同语言但用上位词改写（神经调控手段/情绪障碍 vs 重复经颅磁刺激/抑郁症状），实词几乎不重合。Tier 0 的 grounding 规则会误判为 unsupported —— 用于如实度量词面代理的固有误报率"
+    },
+    {
+      "id": "paraphrase-en-1",
+      "claim": "Non-invasive brain stimulation alleviates mood disturbance [22].",
+      "citations": [22],
+      "sources": {"22": "Repetitive transcranial magnetic stimulation produced antidepressant effects in a sham-controlled trial."},
+      "gold": "supported",
+      "expected_rule": null,
+      "note": "**已知盲区 2**：英文语义改写，词面不重合"
+    },
+    {
+      "id": "cross-zh-en-1",
+      "claim": "加速rTMS可显著改善卒中后抑郁患者的抑郁症状 [23]。",
+      "citations": [23],
+      "sources": {"23": "Accelerated rTMS significantly improved depressive symptoms in patients with post-stroke depression."},
+      "gold": "weakly_supported",
+      "expected_rule": "script_independent_only",
+      "note": "**跨语言但共享术语**（中文论断里的 rTMS 出现在英文文献里）：语言无关信号（术语/缩写/数字）是 Tier 0 在跨语言场景下**唯一**可用的证据，因此判为 weakly_supported 而不是 supported —— 避免被误读成「语义已核实」。这是实测驱动的契约修订：最初设计成一律 abstain，结果你库里那份真实综述 21 条论断有 17 条落进 unverifiable，对最主要的真实场景完全失效"
+    },
+    {
+      "id": "cross-zh-en-2",
+      "claim": "针灸可改善胰岛素抵抗 [24]。",
+      "citations": [24],
+      "sources": {"24": "This review covers transcranial magnetic stimulation coil design and electric field modelling."},
+      "gold": "unverifiable",
+      "expected_rule": "cross_lingual",
+      "note": "**跨语言且没有任何语言无关信号**（论断里没有拉丁术语/缩写，数字也对不上）：必须 abstain。这是有意接受的漏报 —— 为的是避免把每一条跨语言引用都冤枉成引错文献"
+    },
+    {
+      "id": "cross-zh-en-3",
+      "claim": "加速rTMS可显著改善卒中后抑郁 [26]。",
+      "citations": [26],
+      "sources": {"26": "This paper reports a physiotherapy dosing trial after knee replacement surgery."},
+      "gold": "unsupported",
+      "expected_rule": "grounding",
+      "note": "**跨语言且术语对不上**：论断里的 rTMS 在被引文献中不存在 → 低重合指控成立。说明语言无关信号不只是「能过」，它也能抓错 —— 这正是放开拉丁侧门槛的价值"
+    },
+    {
+      "id": "missing-source-1",
+      "claim": "该疗法可降低复发率 [25]。",
+      "citations": [25],
+      "valid_ids": [25],
+      "sources": {"25": ""},
+      "gold": "unverifiable",
+      "expected_rule": "no_source_text",
+      "note": "**编号存在但拿不到摘要/全文**：应标为「无法核实」，而不是「不支持」—— 后者会冤枉一篇可能完全没问题的引用"
+    },
+    {
+      "id": "missing-citation-1",
+      "claim": "该结论已被多项研究支持 [99]。",
+      "citations": [99],
+      "valid_ids": [1, 2],
+      "sources": {"1": "unrelated text"},
+      "gold": "unsupported",
+      "expected_rule": "existence",
+      "note": "编号 99 不存在（越界引用；正常应被上游剔除，此处兜底）"
+    }
+  ]
+}

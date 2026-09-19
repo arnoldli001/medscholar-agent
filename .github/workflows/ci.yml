@@ -125,12 +125,22 @@ jobs:
           python -X utf8 scripts/eval_retrieval.py \
             --dataset regression --k 10 --embed-provider hashing --check
 
+      - name: 引用支持性校验器的自评估（evaluate the evaluator）
+        # 一个从没被衡量过的校验器不可信：在人工标注集上算 precision/recall。
+        # --labels 默认要求**召回 1.0** —— 漏报一个"结论被说反了"可能直接进论文；
+        # 精确率下限 0.85（允许语义改写导致的少量误报，那是词面代理的固有盲区）。
+        run: |
+          python -X utf8 scripts/eval_faithfulness.py --labels \
+            --json faithfulness-eval.json
+
       - name: 上传评测报告
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: eval-report
-          path: eval-report.json
+          path: |
+            eval-report.json
+            faithfulness-eval.json
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
