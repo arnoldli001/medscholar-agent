@@ -12,6 +12,7 @@
 |---|---|---|
 | `check.py` | 静态自检：语法编译 + 模块导入 + 关键纯函数断言。**改完代码先跑这个** | 否 |
 | `check_bat.py` | 校验 `.bat` 为纯 ASCII + CRLF（CI 与 pre-commit 都用它守这条约定） | 否 |
+| `check_arch.py` | **架构约束校验**：层次依赖方向 / 循环依赖 / 文件与函数规模上限。**分层靠它强制，不靠自觉** | 否 |
 | `smoke_db.py` | 数据层冒烟：建库 → 入库 → BM25/向量/混合检索 → 统计 | 否 |
 | `smoke_api.py` | 数据源联调：逐源真实请求并打印诊断（解析结构变了会立刻暴露） | 是 |
 | `smoke_http.py` | HTTP 契约测试（71 项）：全部端点 + SSE + 人工审批往返 | 否 |
@@ -22,11 +23,22 @@
 | `pack_share.py` | 打包分享包到 `dist/` | 否 |
 
 > 评测的用法与方法论（含"这个评测不能证明什么"）见
-> [`docs/EVALUATION.md`](../docs/EVALUATION.md)。
+> [`docs/EVALUATION.md`](../docs/EVALUATION.md)；
+> 架构约束的规则与白名单策略见 [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) 第 2 节。
+
+**数据库迁移**有自己的命令行（不是独立脚本，避免多一份入口）。**不带参数就是只读的状态查询**：
+
+```bat
+.python\python.exe -X utf8 -m medscholar.db.migrations.cli            :: 当前版本、已应用、待应用、指纹异常
+.python\python.exe -X utf8 -m medscholar.db.migrations.cli --plan     :: 打印执行计划（不改库）
+.python\python.exe -X utf8 -m medscholar.db.migrations.cli --apply    :: 执行（默认先备份到 <库>.pre-migration-N.bak）
+.python\python.exe -X utf8 -m medscholar.db.migrations.cli --rollback-steps 1
+```
 
 ```bat
 :: 推荐顺序
 .python\python.exe -X utf8 scripts\check.py
+.python\python.exe -X utf8 scripts\check_arch.py
 .python\python.exe -X utf8 scripts\smoke_http.py
 .python\python.exe -m pytest -q
 .python\python.exe -X utf8 scripts\e2e.py --fresh

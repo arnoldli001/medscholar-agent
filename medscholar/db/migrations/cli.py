@@ -176,6 +176,26 @@ def run(
         conn.close()
 
 
-def main(argv: list[str] | None = None, *, runner_factory: RunnerFactory) -> int:
+def main(argv: list[str] | None = None, *, runner_factory: RunnerFactory | None = None) -> int:
     """CLI 入口别名（实际逻辑见 :func:`run`）。"""
-    return run(argv, runner_factory=runner_factory)
+    return run(argv, runner_factory=runner_factory or _default_runner_factory)
+
+
+def _default_runner_factory(
+    conn: sqlite3.Connection,
+    *,
+    migrations: tuple[Migration, ...],
+    backup: bool,
+) -> Any:
+    """默认的 runner 构造器：延迟导入，避免 CLI 模块在 import 期就拉起执行器。"""
+    from ..migrate import MigrationRunner
+
+    return MigrationRunner(conn, migrations=migrations, backup=backup)
+
+
+if __name__ == "__main__":  # pragma: no cover - 进程入口
+    # 必须显式传 runner_factory：它是**关键字必填参数**，
+    # 早先版本漏了这个 `__main__` 块，于是文档里写的
+    # `python -m medscholar.db.migrations.cli` 会**安静地什么都不做**（退出码 0、零输出）——
+    # 这比报错更危险：用户以为迁移跑过了。现在它至少会打印状态。
+    raise SystemExit(run(runner_factory=_default_runner_factory))
