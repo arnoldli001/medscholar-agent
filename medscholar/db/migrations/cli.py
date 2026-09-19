@@ -176,26 +176,19 @@ def run(
         conn.close()
 
 
-def main(argv: list[str] | None = None, *, runner_factory: RunnerFactory | None = None) -> int:
-    """CLI 入口别名（实际逻辑见 :func:`run`）。"""
-    return run(argv, runner_factory=runner_factory or _default_runner_factory)
+def main(argv: list[str] | None = None, *, runner_factory: RunnerFactory) -> int:
+    """CLI 入口别名（实际逻辑见 :func:`run`）。
 
+    **这里刻意没有 `if __name__ == "__main__":`，也不是 `-m` 的运行入口。**
+    原因是依赖方向：``cli`` 需要 ``MigrationRunner``，而 ``migrate`` 需要 ``cli`` ——
+    如果 cli 直接 import migrate（哪怕写在函数体里），
+    ``scripts/check_arch.py`` 就会报 ``db.migrate ↔ db.migrations.cli`` 循环依赖。
+    这个环是用**工厂注入**打断的：命令行入口放在 :mod:`medscholar.db.migrate`，
+    由它把 ``MigrationRunner`` 传进来。
 
-def _default_runner_factory(
-    conn: sqlite3.Connection,
-    *,
-    migrations: tuple[Migration, ...],
-    backup: bool,
-) -> Any:
-    """默认的 runner 构造器：延迟导入，避免 CLI 模块在 import 期就拉起执行器。"""
-    from ..migrate import MigrationRunner
-
-    return MigrationRunner(conn, migrations=migrations, backup=backup)
-
-
-if __name__ == "__main__":  # pragma: no cover - 进程入口
-    # 必须显式传 runner_factory：它是**关键字必填参数**，
-    # 早先版本漏了这个 `__main__` 块，于是文档里写的
-    # `python -m medscholar.db.migrations.cli` 会**安静地什么都不做**（退出码 0、零输出）——
-    # 这比报错更危险：用户以为迁移跑过了。现在它至少会打印状态。
-    raise SystemExit(run(runner_factory=_default_runner_factory))
+    所以正确的命令是 ``python -m medscholar.db.migrate``（见 scripts/README.md）。
+    —— 这条注释是踩过之后补的：我一度按想当然的模块名把文档写成
+    ``-m medscholar.db.migrations.cli``，发现"没输出"后又在这里加了 ``__main__``，
+    结果把别人刻意打断的环又接了回去，随即被架构校验器抓住。
+    """
+    return run(argv, runner_factory=runner_factory)

@@ -123,7 +123,9 @@ class PrismaFlow:
         return problems
 
 
-#: PRISMA 2020 的 27 个条目（保留官方编号与名称，便于对照投稿要求）
+#: PRISMA 2020 清单：官方 **27 个条目**，其中若干条目带子项（10a/10b、13a~13c、16a/16b、
+#: 20a/20b、23a/23b、24a~24c 等），所以这里一共有 **35 个编号**。
+#: 保留官方编号是为了让研究者能直接对着投稿要求逐条打勾。
 PRISMA_CHECKLIST: tuple[tuple[str, str, str], ...] = (
     ("1", "Title", "标题中注明是系统评价/Meta 分析"),
     ("2", "Abstract", "结构化摘要（含注册号）"),
@@ -169,7 +171,12 @@ _AUTO_ITEMS: frozenset[str] = frozenset({"6", "7", "16a", "16b", "17", "24a"})
 def prisma_checklist_status(
     flow: PrismaFlow | None = None, *, covered: Iterable[str] | None = None
 ) -> list[dict[str, Any]]:
-    """返回 27 个条目的状态：``auto``（工具能填）/ ``manual``（需要人来写）/ ``done``。
+    """返回清单各条目的状态：``auto``（工具能填）/ ``manual``（需要人来写）/ ``done``。
+
+    条目数见 :data:`PRISMA_CHECKLIST`（官方 27 条，含子项共 35 个编号）。
+    目前只有 6 个编号能被工具自动填（信息来源、检索式、筛选结果、被排除研究清单、
+    纳入研究特征、注册信息），其余都需要研究者自己写 —— **不要把这条能力说成
+    "自动生成 PRISMA 清单"**，它只保证"该填数字的那几项自动且自洽"。
 
     ``covered`` 可由调用方传入"已经在正文里写到的条目号"，用于把清单当**投稿自检表**用。
     """
