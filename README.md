@@ -10,10 +10,12 @@
 
 | | |
 |---|---|
-| 语言/规模 | Python 21.2k 行 · 原生 JS 4.2k 行 · 测试 7.1k 行 |
-| 测试 | **757 个测试**，CI 全绿（**6 个作业**：lint / test / **eval** / smoke / package / test-linux） |
+| 语言/规模 | Python 约 2.7 万行 · 原生 JS/HTML/CSS 约 7 千行 |
+| 测试 | **1374 个测试全绿**，CI 6 个作业（lint / test / **eval** / smoke / package / test-linux） |
+| 架构 | 五层（platform / domain / infrastructure / application / interface）+ **自动化架构约束校验**（层次方向 · 循环依赖 · 规模上限，CI 强制） |
 | 检索评测 | recall@k · nDCG@k · MRR · MAP + 7 种配置消融 + 阴性对照；**每次 CI 跑门禁** |
 | 引用核查 | claim-level：编号存在性 + **数字溯源** + **方向矛盾** + 过度主张 + 跨语言弱证据；校验器自身 recall=1.00 |
+| 生产化 | 可观测性（trace + token/成本账本 + 失败分类）· 韧性（重试/熔断/限流/舱壁）· **RAG 提示注入防御** · 缓存 · schema 迁移 · 提示词版本化 |
 | 后端 | FastAPI + uvicorn（异步）· Pydantic v2 · httpx |
 | 存储 | SQLite（16 张表 + 2 张 FTS5 虚拟表）· sqlite-vec · 单文件、可整目录拷走 |
 | 检索 | FTS5 BM25 ⊕ sqlite-vec KNN → RRF(k=60) · 中文字符级切分 |
@@ -21,11 +23,16 @@
 | 数据源 | **9 个官方检索源** + Unpaywall（DOI→OA 全文）· 限流/退避/自适应降速 |
 | 交付 | 自包含便携运行时，双击 `run.bat` 即用；朋友无需装 Python |
 
-**先看这几份文档**：架构深挖与选型理由见本文
-[关键设计决策](#关键设计决策选型与权衡) 与 [深水区问题](#深水区问题与解决)；
-**检索质量怎么量化**见 [`docs/EVALUATION.md`](docs/EVALUATION.md)；
-面试问答准备见 [`docs/INTERVIEW-FAQ.md`](docs/INTERVIEW-FAQ.md)；
-HTTP 契约见 [`docs/API.md`](docs/API.md)。
+**文档索引**：
+
+| 想知道什么 | 看哪份 |
+|---|---|
+| 架构长什么样、每个选型的代价 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)（本文 [系统架构](#系统架构) 是浓缩版） |
+| "检索变好了"怎么量化 | [`docs/EVALUATION.md`](docs/EVALUATION.md) |
+| 面试怎么讲这个项目 | [`docs/INTERVIEW-PROJECT.md`](docs/INTERVIEW-PROJECT.md)、[`docs/INTERVIEW-FAQ.md`](docs/INTERVIEW-FAQ.md) |
+| 简历怎么写、怎么演示 | [`docs/RESUME.md`](docs/RESUME.md)、[`docs/DEMO.md`](docs/DEMO.md) |
+| 亮点清单 / 踩过的坑 | [`docs/HIGHLIGHTS.md`](docs/HIGHLIGHTS.md)、[`docs/PROBLEMS-AND-STRATEGY.md`](docs/PROBLEMS-AND-STRATEGY.md) |
+| HTTP 契约 | [`docs/API.md`](docs/API.md) · 脚本用法 [`scripts/README.md`](scripts/README.md) |
 
 ---
 
@@ -46,42 +53,88 @@ HTTP 契约见 [`docs/API.md`](docs/API.md)。
 
 ## 系统架构
 
+代码按**五层**组织，依赖方向单向，且**由 CI 强制**（不是文档里的口头约定）。
+
 ```
-┌────────────── 前端：免构建三列工作台（HTML + CSS + 原生 JS，零 CDN、零打包） ───────────────┐
-│  对话视口(SSE 流式) · 文献卡片 · 综述草稿 · 引用列表 · 论文写作 · 质疑/纠错工具条 · 学习闭环徽标  │
-└────────────────────────────────────┬───────────────────────────────────────────────────┘
-                                     │ REST + SSE（事件列表是唯一事实来源，断线可完整补播）
-┌────────────────────────────────────▼───────────────────────────────────────────────────┐
-│ FastAPI 服务端 │ 55+ 端点 · SSE · 后台运行管理 · 人工审批 Future · 静态资源 mtime 版本号      │
-└────────────────────────────────────┬───────────────────────────────────────────────────┘
-                                     │
-┌────────────────────────────────────▼───────────────────────────────────────────────────┐
-│ 工作流层：Plan →〔人工审批〕→ Execute → Reflect → Synthesize → Review → 成稿落库           │
-│             │         │            │          │             │            │              │
-│           LLM 规划   用户决定     Scout       Critic       Writer      Formatter         │
-│         (结构化 JSON) 批准/改/取消 + Reader   (双轨评估)  (逐节流式)  + 引用越界剔除        │
-│                                                                                          │
-│ 每个阶段结束写一次**快照**（run_steps）→ 支持断点续跑：已完成的阶段不重跑                     │
-└────────────────────────────────────┬───────────────────────────────────────────────────┘
-                                     │
-┌────────────────────────────────────▼───────────────────────────────────────────────────┐
-│ 检索与知识层                                                                              │
-│  · 9 个检索源客户端 + Unpaywall：令牌桶限流 · 指数退避+抖动 · 429 自适应降速 · 单源失败隔离    │
-│  · 检索式之间并发(信号量=3) · 单检索式内多源并发(asyncio.gather)                            │
-│  · 混合检索：FTS5 BM25 ⊕ sqlite-vec KNN → RRF(k=60)；中文逐字切分 + 三级降级查询              │
-│  · 嵌入管道：增量、批量、跨事件循环安全                                                     │
-│  · 合规导入：题录文件(RIS/BibTeX/EndNote/WoS/CSV) · 官方批量包(PubMed baseline/PMC OA) · Zotero │
-└────────────────────────────────────┬───────────────────────────────────────────────────┘
-                                     │
-┌────────────────────────────────────▼───────────────────────────────────────────────────┐
-│ 存储：单个 SQLite 文件                                                                    │
-│  papers · papers_fts(FTS5) · paper_fulltext · fulltext_fts · run_steps(阶段快照)           │
-│  feedback(反馈/纠错) · manuscripts(论文) · citations · search_logs · artifacts · sessions    │
-└──────────────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│ interface/   入口     server/（FastAPI 组合根 + 6 个 router，49 条 API 路径）│
+│                      cli（命令行） · mcp（MCP Server）                     │
+├──────────────────────────────────────────────────────────────────────────┤
+│ application/ 编排     agent/（Orchestrator + Scout/Reader/Critic/Writer/   │
+│                      Formatter，Plan→审批→Execute→Reflect→Synthesize，     │
+│                      阶段快照可断点续跑）                                   │
+│                      retrieval（混合检索 + 材料拼装，**安全边界在此**）      │
+│                      tools · feedback（学习闭环）· manuscript              │
+├──────────────────────────────────────────────────────────────────────────┤
+│ infrastructure/ 适配  db/（SQLite+FTS5+sqlite-vec，repositories 按边界拆）  │
+│                      api/（9 个数据源客户端 + 限流/退避）                   │
+│                      llm/（client · transport 重试熔断 · 两个后端 · JSON 容错）│
+│                      embedding/ · importers/ · export/ · bulk · zotero     │
+├──────────────────────────────────────────────────────────────────────────┤
+│ domain/      领域     models · text（CJK 切分）· query（检索式构造）        │
+│                      citation（6 种格式）· dedupe（**零 IO**）             │
+└──────────────────────────────────────────────────────────────────────────┘
+        ▲ 以上所有层都可以依赖 ↓
+┌──────────────────────────────────────────────────────────────────────────┐
+│ platform/    横切     config · observability（trace/账本/失败分类）·        │
+│                      resilience（重试/熔断/令牌桶/舱壁）· security（注入   │
+│                      防御/脱敏/输出护栏）· cache · prompts（版本化）        │
+│                      —— 被所有层依赖，自己只依赖标准库                      │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-**分层原则**：`api/` 只负责 HTTP 与字段映射，`agent/` 只依赖 `Paper` 模型，
-`db/` 是唯一的事实来源，`server/` 不含业务逻辑。因此**新增一个数据源不需要改动下游任何代码**。
+### 一次请求的链路（含护栏位置）
+
+```
+用户课题
+  → [interface] HTTP 路由，取进程单例（db / registry / runtime）
+  → [application] Scout 并发检索 9 个源（令牌桶限流 + 熔断 + 去重合并）
+  → [infrastructure/db] 落库：单写者 + 事务 + FTS/向量双索引
+  → [application] Reader 取开放获取全文 → Critic 双轨评估（启发式 + LLM）
+  → [application/retrieval] ★ 材料拼装：注入扫描 → 包裹成「不可信数据」块
+  → [infrastructure/llm] 传输层重试/熔断 + token/耗时/失败分类记账
+  → [eval/faithfulness] 引用支持性校验（编号/数字/方向/过度主张）
+  → 流式回传（SSE）+ 产物落库（阶段快照）
+```
+
+### 分层怎么保证不被违反
+
+`scripts/check_arch.py`（纯 AST 分析、零依赖）在 CI 与 pre-commit 里强制三件事：
+
+| 检查 | 规则 | 现状 |
+|---|---|---|
+| 层次依赖方向 | 低层不得依赖高层；`platform` 与 `domain` 只依赖自己；运行时不得依赖 `eval` | 违规 **0** |
+| 循环依赖 | 模块级强连通分量必须为空 | 环 **0** |
+| 规模上限 | 文件 ≤800 行 / 函数 ≤300 行 / 类 ≤450 行 | 仅剩白名单内历史债（每条都打印原因） |
+
+**为什么值得单独写一个校验器**：分层架构从来不是"不知道该分"，而是**知道但守不住** ——
+一次"为了赶需求"的跨层 import 不会体现在业务逻辑的 diff 里，评审时几乎必然漏过。
+它已经抓到过真实问题：`importers`（基础设施）在函数体里懒加载 `agent.reader`（应用层）、
+`db.repo ↔ embedding.pipeline` 的循环依赖（改用依赖倒置打断）。
+细节见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 第 2 节。
+
+**分层原则**（可直接引用）：`server/` 只做 HTTP 与字段映射、不含业务逻辑；
+`agent/` 只依赖领域模型与仓储门面；`db/` 是唯一的事实来源；
+新代码进新分层目录，旧包路径通过兼容外壳保持可用（见 [ADR-9](docs/ARCHITECTURE.md)）。
+因此**新增一个数据源不需要改动下游任何代码**。
+
+---
+
+## 生产级能力（不是"能跑"，而是"坏了能查、崩了能恢复"）
+
+| 能力 | 实现 | 关键设计 |
+|---|---|---|
+| **可观测性** | `platform/observability.py` + `GET /api/metrics` | trace/span 树（contextvars 隔离并发任务）；**LLM 用量账本**按模型/阶段/失败类型聚合，含 token 与人民币成本（本地模型为 0）；手写分位数；**成功与失败都记账**（只统计成功会得到"平均耗时很漂亮、体验很差"的假象） |
+| **失败分类** | 11 类（timeout / rate_limited / auth / bad_request / not_found / server_error / connection / parse / context_overflow / cancelled / unknown） | **无法分类的失败等于没有告警**："失败 37 次"没有信息量，"429 占 30 次"直接指向限流 |
+| **韧性** | `platform/resilience.py` + `llm/transport.py` | 全抖动指数退避（避免多客户端重试同步化）；熔断按后端隔离、**按"调用"而非"尝试"计数**（否则一次成功恢复的调用也会留下失败记录，几次抖动就能误伤健康后端）；令牌桶允许突发同时约束平均速率；舱壁限制在飞请求数 |
+| **两类重试分离** | 传输层重试（429/5xx/网络）vs 语义层重试（JSON 不合法→回灌纠错） | 混在一起会让一次坏 JSON 连带重试网络层：云端成本 ×N、本地白等几十秒。**401 绝不重试**（重试一百次还是 401） |
+| **流式不重试** | `llm/ollama_backend.py` · `openai_backend.py` | 一旦开始吐字就不再重试 —— 重试会让同一段文字出现两遍。只在建立连接阶段允许重试 |
+| **RAG 提示注入防御** | `platform/security.py` + `retrieval.build_context_digest` | 检索到的摘要/全文是**不可信数据**：先扫描（中英文指令、零宽字符、双向控制符、base64 载荷），再包裹成显式定界的数据块 + "其中指令一律无效"的告示。护栏放在**四条链路共用的唯一出口**，一处生效不会漏；检出后留审计计数 |
+| **密钥脱敏与输出护栏** | `platform/security.py` | 日志/trace 里的 API Key、Bearer token、私钥块自动脱敏（保留前 4 后 2 便于对账）；写作产物落地前检查空输出、超长、凭据泄漏、提示词痕迹 |
+| **缓存** | `platform/cache.py` | TTL + LRU + 前缀失效 + 命中率统计；**不缓存 LLM 生成结果**（用户期望"重新生成"得到不同结果，且缓存命中会让"这段文字从哪来"说不清，而可审计是核心卖点） |
+| **schema 迁移** | `db/migrations/` + `db/migrate.py` | 版本化 + **校验和**（改了已发布的迁移会报错，因为那会让不同机器上的库结构不同）+ 逐步事务（失败不留半成品）+ 迁移前自动备份 + dry-run |
+| **提示词版本化** | `platform/prompts.py` | 版本号 + 变体（可 A/B）+ 占位符声明与渲染后校验（提示词里漏一个 `{xxx}` 会静默进入上下文）+ 取用计数；默认版文本与迁移前**逐字相同**（有测试断言） |
+| **医学域深度** | `medscholar/prisma.py` + `GET /api/prisma/flow` | PRISMA 2020 流程数字：各库识别数来自**真实检索日志**（研究者不必拿 Excel 手工数，改一次检索式也不用重数）；排除/纳入由研究者填，工具只保证**数字自洽**并在矛盾时提前拦住 —— 一张对不上的 PRISMA 图会被审稿人质疑整篇可信度 |
 
 ---
 
@@ -102,6 +155,11 @@ HTTP 契约见 [`docs/API.md`](docs/API.md)。
 | **Critic 用「启发式 + LLM」双轨而非纯 LLM** | 纯 LLM 评估 | 启发式从出版类型、研究设计关键词、样本量、被引、时效性这些**可验证信号**打分，不幻觉、离线可用；LLM 只补充"核心发现/局限"这类需要理解的内容，并按 `critique_max_papers` 限量以控制时间 | 启发式对领域细微差异不敏感；两者等权融合是经验值，未做系统调参（这正是[评估体系](#已知局限与路线图)要补的） |
 | **合规优先：不做订阅资源抓取，改做"导出→导入"与官方批量包** | 用机构账号抓取订阅全文 | 学校电子资源管理办法明文禁止批量下载，且出版商会封禁**整个学校**的 IP 段。技术上能做、但**后果由全校承担**，因此主动放弃这条路径，改提供四条合规替代（题录导入 / 官方批量包 / Zotero 本地库 / 链接解析器跳转） | 覆盖不了订阅内容的**全文**自动化获取；这是有意识的取舍，并写进了[合规声明](#合规声明)与产品文案 |
 | **数字溯源校验（论文模块）** | 靠提示词约束模型别编数据 | 医学论文里编一个 P 值就是学术不端。提示词是概率约束，**程序校验才是确定性约束**：正文每个数字都要能在用户提供的数据/文献里找到出处，找不到就单独列出来给人工核对 | 会误报（同义表述、换算单位）；但对"防编造"来说，**误报比漏报可接受** |
+| **自研架构约束校验，而不是靠评审** | 靠 code review、靠文档约定、引入 import-linter | 依赖漂移**不体现在业务逻辑的 diff 里**，评审几乎必然漏过。约 470 行 AST 校验覆盖三个维度（层次方向 / 循环依赖 / 规模上限），零第三方依赖，已抓到真实违规 | 需要维护规则与白名单；白名单只允许变小，否则校验器会退化成摆设 |
+| **渐进式重构 + 兼容外壳，而不是一次性全量搬迁** | 一次性把所有包搬进 `infrastructure/`、`application/` | 旧 import 路径是**公开契约**（CLI、HTTP、MCP、脚本、文档都在用），全量搬迁要 30+ 个兼容外壳文件、风险高而收益只是"目录好看"。改为：新代码进新分层目录 + 旧包按映射表纳入**同一套自动校验** | 仓库短期存在两套路径；外壳必须由测试锁住（用 `is` 身份断言，漏一个私有名就 ImportError，这是实测踩过的） |
+| **护栏放在"材料进入提示词的唯一出口"** | 每个调用点各自包裹检索内容 | 写作/评审/反思/润色四条链路都从 `build_context_digest` 取材料，护栏放这里**一处生效、不会漏**；放在调用点则"新增一条链路就多一个缺口" | 该函数变成关键路径，改动需谨慎；`guard=False` 只留给离线评测 |
+
+完整 ADR（含"什么时候该重新选"）见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 第 3 节。
 
 ---
 
@@ -178,6 +236,52 @@ HTTP 契约见 [`docs/API.md`](docs/API.md)。
 * **根因**：Unpaywall **会校验邮箱真实性**，`example.com` 这类占位地址被明确拒绝（"Please use your own email address"）。这类约束文档里不显眼，只有真调用才会暴露。
 * **方案**：捕获 422 并转成**可照做的中文提示**（去填 `sources.unpaywall.email`），同时告诉用户"也可以直接 `enabled: false` 关掉，其余功能不受影响"——外部依赖不可用时不该变成阻断性故障。
 * **验证**：`tests/test_unpaywall.py` 用真实 422 响应体做回归，断言提示里包含配置项名与关闭方式。
+
+### 11. 守卫脚本自己在中文 Windows 的管道里崩掉（`✓` 不在 GBK 里）
+
+* **现象**：跑 `.bat` 校验脚本时崩出 `UnicodeEncodeError: 'gbk' codec can't encode character '\u2713'`，
+  而且**崩在"校验通过"那一行的打印上** —— 看起来像 `.bat` 有问题，实际是守卫自己失败。
+* **根因**：三层叠加。①脚本打印 `✓`（U+2713），这个字符不在 GBK 里；
+  ②**真实控制台不触发**，因为 Python 对控制台走 `WriteConsoleW` 绕开了编码 ——
+  只有输出被**重定向/管道**接手时才按 ANSI 代码页（cp936）编码；
+  ③CI 跑在 UTF-8 的 ubuntu 上，**永远发现不了**。
+  更糟的是它是**守卫脚本**：守卫自己坏了比被守卫的东西坏了更危险。
+* **方案**：4 行 `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`
+  （项目里 20 多个脚本早就有这行，**只有这一个漏了** —— 约定没有强制手段就会漂移）。
+  并补上**真实子进程回归测试**：用 `PYTHONIOENCODING=gbk` 强制非 UTF-8 管道，
+  断言退出码为 0 且 stderr 无 `UnicodeEncodeError`，并把 `cp1252`/`ascii` 参数化（更窄的编码只能降级，不能崩）。
+* **教训**：**检查工具本身没有测试，等于把信任建在它身上却没有验过它。**
+
+### 12. 架构校验器抓到的两类真实违规（人眼 review 抓不住）
+
+* **现象**：`check_arch.py` 报出 ①`importers`（基础设施层）依赖 `agent.reader`（应用层）；
+  ②`db.repo ↔ embedding.pipeline` 循环依赖。
+* **根因**：①是一条**藏在函数体里的懒加载 import**（为了读 PDF 而 `from ..agent.reader import extract_pdf_text`），
+  从文件头的 import 列表里根本看不出来；②数据层在 `insert_paper(embed=True)` 里懒加载嵌入管道，
+  而管道要 import 数据层读文献 —— 依赖方向反了。
+* **方案**：①不是加白名单，而是把 PDF 解析**下沉**到 `importers/pdf.py`（它本来就是 IO 适配器），
+  让依赖方向变成"应用层 → 基础设施"；②用**依赖倒置**打断环：数据层只留一个空钩子，
+  嵌入层在导入时注册自己（`register_embed_hooks`），数据层因此完全不认识嵌入层，
+  而 `embed=True` 的调用方式保持不变。
+* **教训**：**分层不是"画在图里"，而是"能被机器拒绝"。** 顺带一提，校验器自己也曾有 bug
+  （把包的 `__init__.py` 当普通模块解析相对导入，报出 27 条假违规）——
+  假阳性会把真问题淹没，所以解析逻辑单独做了核对；它还必须在被测代码有语法错误时**报告而不是崩掉**。
+
+### 13. 材料编号被静默重排（一个会让"差评挂到好文献头上"的 bug）
+
+* **现象**：写引用忠实度测试时顺手断言"材料里的编号必须与显式编号一致"，结果直接失败：
+  传入 `[(1, A), (3, B)]` 得到的是 `[1] A` 与 `[2] B`。
+* **根因**：`build_context_digest` 的文档说"按显式编号构建（编号与正文引用严格对应）"，
+  也确实往每条数据里塞了 `__index__`；但底层 `digest_papers` 只会**从 start_index 顺序递增**，
+  完全忽略 `__index__`。于是只要调用方传入的是**筛选过的子集**（Critic 恰好就是：
+  按启发式打分挑出最相关的若干篇），材料里的编号就与真实引用编号错位。
+* **影响**：Critic 拿回模型点评后按**真编号**回查文献 ——
+  模型说的"第 2 篇"会被挂到真编号 2 的那篇上，那篇可能根本不在材料里，于是
+  ①点评丢失，或更糟 ②**把差评挂到无关文献头上**，直接影响"哪些文献该进综述"的判断。
+* **方案**：让 `digest_papers` 在数据带 `__index__` 时使用它，否则退回顺序编号；
+  并补上回归测试（传入带空洞的编号，断言 `[3]` 原样出现、`[2]` 不出现）。
+* **教训**：**文档里写下的契约，必须有测试守着** —— 否则它会静静地与实现分叉，
+  而分叉的代价由下游（这里是文献质量判断）承担。
 
 ---
 
@@ -746,26 +850,34 @@ medscholar-agent/
 │   └── exports/                             导出文件
 ├── docs/API.md                              HTTP 契约（前端与后端共同依据）
 ├── medscholar/
-│   ├── config.py        配置加载             models.py        数据模型
-│   ├── textutil.py      中文字段处理          dedupe.py        跨库去重合并
-│   ├── retrieval.py     混合检索门面          tools.py         10 个原子工具
-│   ├── cli.py           命令行
-│   ├── db/              SQLite + FTS5 + sqlite-vec + 迁移
+│   ├── platform/        横切层（只依赖标准库）
+│   │   ├── config.py            配置加载（YAML + .env + 环境变量）
+│   │   ├── observability.py     trace/span · LLM 用量与成本账本 · 失败分类
+│   │   ├── resilience.py        重试（全抖动退避）· 熔断 · 令牌桶 · 舱壁
+│   │   ├── security.py          提示注入检测 · 不可信内容包裹 · 密钥脱敏 · 输出护栏
+│   │   ├── cache.py             TTL + LRU + 前缀失效 + 命中率
+│   │   └── prompts.py           提示词版本注册表（含变体）
+│   ├── domain/          领域层（零 IO）
+│   │   ├── models.py · text.py（CJK 切分）· query.py（检索式构造）
+│   │   ├── citation/           6 种引用格式与参考文献表排版
+│   │   └── dedupe.py           同一文献判定与合并
+│   ├── db/              SQLite + FTS5 + sqlite-vec
+│   │   ├── repositories/       papers · search · embeddings · fulltext · citations
+│   │   │                       · library · runs（按业务边界拆开，repo.py 是稳定门面）
+│   │   └── migrations/ + migrate.py   版本化迁移（校验和 · 逐步事务 · 备份）
 │   ├── api/             9 个检索源 + Unpaywall（限流/退避/降级）
-│   ├── embedding/       嵌入提供方 + 增量管道
-│   ├── llm/             统一 LLM 客户端 + 容错 JSON 解析 + 提示词
+│   ├── embedding/       嵌入提供方 + 增量管道（含查询向量缓存）
+│   ├── llm/             统一客户端 · transport（重试熔断）· ollama/openai 后端
+│   │                    · json_parsing（形状感知容错）· errors
 │   ├── agent/           工作流（graph）+ 六智能体 + 运行时（含断点续跑）
-│   ├── importers/       题录文件解析（RIS/BibTeX/EndNote/WoS/CSV）
-│   ├── bulk.py          官方批量包导入（PubMed baseline / PMC OA，流式）
-│   ├── zotero.py        Zotero 本地库桥接（只读）
-│   ├── feedback.py      反馈/质疑 → 纠错记忆 + 偏好对 + 重加权
-│   ├── manuscript.py    基于实验数据的论文生成 + 数字溯源校验
-│   ├── cite/            引用格式化引擎
-│   ├── export/          导出
-│   ├── server/          FastAPI 服务端
+│   ├── retrieval.py     混合检索门面 + **材料护栏（不可信内容唯一出口）**
+│   ├── eval/            指标 · 消融 harness · 引用忠实度校验 + 标注集
+│   ├── importers/       题录解析（RIS/BibTeX/EndNote/WoS/CSV）+ Zotero + PDF 解析
+│   ├── bulk.py · zotero.py · feedback.py · manuscript.py · tools.py · cli.py
+│   ├── server/          组合根 app.py + deps.py + routes/（6 个 APIRouter）
 │   ├── mcp/             MCP Server
 │   └── web/             前端（纯静态，免构建）
-└── scripts/             自检 / 冒烟 / 端到端 / 基准 / 打包
+└── scripts/             自检 / 架构校验 / 冒烟 / 端到端 / 评测 / 基准 / 打包
 ```
 
 ---
@@ -773,19 +885,22 @@ medscholar-agent/
 ## 测试与工程质量
 
 ```bat
-.python\python.exe -m pytest tests -q               :: 757 个测试
+.python\python.exe -m pytest tests -q               :: 1374 个测试
 .python\python.exe scripts\check.py                 :: 语法 + 模块导入 + 纯函数断言
 .python\python.exe scripts\check_bat.py             :: .bat 必须纯 ASCII + CRLF
+.python\python.exe -X utf8 scripts\check_arch.py    :: 分层方向 / 循环依赖 / 规模上限
 .python\python.exe -X utf8 scripts\smoke_http.py    :: 71 项真实 uvicorn 端到端
+.python\python.exe -X utf8 scripts\eval_retrieval.py --check       :: 检索质量门禁
+.python\python.exe -X utf8 scripts\eval_faithfulness.py --labels   :: 引用校验器自评估门禁
 ```
 
 ### CI（GitHub Actions，6 个作业）
 
 | 作业 | 平台 | 内容 |
 |---|---|---|
-| `lint` | ubuntu | `ruff`(F,E9) + `compileall` + `check.py` + `check_bat.py` |
-| `test` | windows / 3.13 | 757 个测试（与随包便携运行时同版本，保证"CI 绿 = 用户能用"） |
-| **`eval`** | ubuntu | **检索质量回归**：消融评测 + 阈值门禁 + 与 `hybrid_search` 的一致性自检 |
+| `lint` | ubuntu | `ruff`(F,E9) + `compileall` + `check.py` + `check_bat.py` + **`check_arch.py`（架构约束）** |
+| `test` | windows / 3.13 | 1374 个测试（与随包便携运行时同版本，保证"CI 绿 = 用户能用"） |
+| **`eval`** | ubuntu | **检索质量回归**：消融评测 + 阈值门禁 + 与 `hybrid_search` 的一致性自检 + **引用校验器自评估**（召回下限 1.0） |
 | `smoke` | windows | 真实 uvicorn，逐条核对 `docs/API.md`（离线、不联网） |
 | `package` | windows | 打包回归 + 断言分享包**不含 `data/`**（合规） |
 | `test-linux` | ubuntu | 实验性（`continue-on-error`）——README 已声明 Linux 未验证 |

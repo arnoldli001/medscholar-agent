@@ -26,13 +26,17 @@
 > [`docs/EVALUATION.md`](../docs/EVALUATION.md)；
 > 架构约束的规则与白名单策略见 [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) 第 2 节。
 
-**数据库迁移**有自己的命令行（不是独立脚本，避免多一份入口）。**不带参数就是只读的状态查询**：
+**数据库迁移**有自己的命令行。入口是 `medscholar.db.migrate`（**不是** `...migrations.cli` ——
+后者是被注入的 CLI 实现，按依赖方向刻意不注册为 `-m` 入口，否则会形成
+`db.migrate ↔ db.migrations.cli` 循环依赖，架构校验器会报错）：
 
 ```bat
-.python\python.exe -X utf8 -m medscholar.db.migrations.cli            :: 当前版本、已应用、待应用、指纹异常
-.python\python.exe -X utf8 -m medscholar.db.migrations.cli --plan     :: 打印执行计划（不改库）
-.python\python.exe -X utf8 -m medscholar.db.migrations.cli --apply    :: 执行（默认先备份到 <库>.pre-migration-N.bak）
-.python\python.exe -X utf8 -m medscholar.db.migrations.cli --rollback-steps 1
+:: 不带参数 = 只读状态：当前版本、已应用、待应用、指纹异常
+.python\python.exe -X utf8 -m medscholar.db.migrate
+.python\python.exe -X utf8 -m medscholar.db.migrate --plan      :: 打印执行计划（不改库）
+.python\python.exe -X utf8 -m medscholar.db.migrate --apply     :: 执行（默认先备份 <库>.pre-migration-N.bak）
+.python\python.exe -X utf8 -m medscholar.db.migrate --rollback-steps 1
+.python\python.exe -X utf8 -m medscholar.db.migrate --help
 ```
 
 ```bat
