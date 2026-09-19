@@ -25,6 +25,16 @@ import argparse
 import sys
 from pathlib import Path
 
+# 输出里含 ✓ / ✗ 这类非 GBK 字符。它们在**真实控制台**下没问题（Python 走
+# WriteConsoleW），但一旦输出被**重定向或管道**接手，就按 ANSI 代码页（中文 Windows 是
+# cp936）编码，✓(U+2713) 不在 GBK 里 —— 直接 UnicodeEncodeError 崩掉，
+# 而且崩在"校验通过"的打印上，看起来像校验失败。统一强制 UTF-8 + replace。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, OSError):  # pragma: no cover - 非标准流
+    pass
+
 #: 不检查的目录（第三方运行时、构建产物、缓存）
 SKIP_DIRS = {".python", ".venv", "venv", "dist", "build", ".cache", ".git",
              "node_modules", "__pycache__", ".pytest_cache"}

@@ -68,3 +68,21 @@ medscholar = [
 testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+# 与 CI（`ruff check … --select F,E9`）和 pre-commit 保持同一套规则。
+#
+# 为什么只查 F + E9：这是**已跑通**的项目，把 4 万行代码一次性交给全部规则会产生
+# 几百条风格诊断（BLE001 / RUF022 / UP035 …），真正有信息量的"未定义名"会被淹没。
+# 风格问题在有测试覆盖的前提下优先级低于正确性，宁可不查也不制造噪音。
+#
+# 为什么还要显式写进配置（而不是只在命令行传 --select）：
+# ruff 的**默认规则集会随版本变化** —— 实测 0.16 的默认集已包含扩展规则，
+# 于是本机 `ruff check .` 报 264 条、CI 报 0 条，这种差异无法复现也无法 review。
+# 把规则、排除目录和 Python 版本都 pin 在仓库里，"本地绿 = CI 绿"才成立。
+target-version = "py310"
+line-length = 100
+exclude = [".python", ".venv", "venv", "build", "dist", "data", ".ruff_cache"]
+
+[tool.ruff.lint]
+select = ["F", "E9"]

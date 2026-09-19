@@ -10,9 +10,10 @@
 
 | | |
 |---|---|
-| 语言/规模 | Python 16.4k 行 · 原生 JS 4.2k 行 · 测试 5.2k 行 |
-| 测试 | **687 个测试**，CI 全绿（**6 个作业**：lint / test / **eval** / smoke / package / test-linux） |
+| 语言/规模 | Python 21.2k 行 · 原生 JS 4.2k 行 · 测试 7.1k 行 |
+| 测试 | **757 个测试**，CI 全绿（**6 个作业**：lint / test / **eval** / smoke / package / test-linux） |
 | 检索评测 | recall@k · nDCG@k · MRR · MAP + 7 种配置消融 + 阴性对照；**每次 CI 跑门禁** |
+| 引用核查 | claim-level：编号存在性 + **数字溯源** + **方向矛盾** + 过度主张 + 跨语言弱证据；校验器自身 recall=1.00 |
 | 后端 | FastAPI + uvicorn（异步）· Pydantic v2 · httpx |
 | 存储 | SQLite（16 张表 + 2 张 FTS5 虚拟表）· sqlite-vec · 单文件、可整目录拷走 |
 | 检索 | FTS5 BM25 ⊕ sqlite-vec KNN → RRF(k=60) · 中文字符级切分 |
@@ -265,6 +266,49 @@ RTX 4060 显存带宽 272 GB/s ÷ 模型 6.19 GB ≈ **44 tok/s 理论上限**�
 生产配置平均仍返回 **10.0 条**（= top_k）。这暴露了一个必须显式盯住的系统特性：
 **RRF 融合天然总会给出答案，没有"我不知道"的出口** ——
 所以单靠检索层无法拒绝无关问题，必须由下游的引用越界剔除与数字溯源校验兜住。
+
+### 引用支持性：`[n]` 到底支不支持那句话
+
+检索评测只能证明"文献被检到了"。而"**结论被说反了**"能通过引用存在性校验，
+却是医学写作里最严重的错误之一。所以再上一层：
+
+```bat
+:: 核查库里最新那份综述（逐条论断）
+.python\python.exe scripts\eval_faithfulness.py --from-db
+:: 加上 LLM 逐条判定（跨语言场景建议开）
+.python\python.exe scripts\eval_faithfulness.py --from-db --llm
+:: 衡量校验器本身准不准
+.python\python.exe scripts\eval_faithfulness.py --labels
+```
+
+**Tier 0（确定性规则，离线、进 CI）**：`existence`（越界引用）·
+`numbers`（**论断里的数字在被引文献中找不到**）· `direction`（**强主张 vs
+被引文献的"无显著差异"→ 方向矛盾**）· `overclaim`（"证实/治愈"配 protocol/病例报告）·
+`grounding`（同语言下实词重合过低）· `cross_lingual`（跨语言且无信号 → 弃权）。
+
+**Tier 1（`--llm`）**：LLM 逐条判 `supported/partial/unsupported/contradicted` +
+理由 + 原文证据片段；`--self-consistency` 问两次，不一致标 `uncertain`。
+
+**实测（真实综述，21 条带引用论断）**：
+```
+判定分布：weakly_supported 21
+说明：21 条仅凭语言无关信号（数字/术语/缩写 rTMS/PSD/DLPFC）核对通过，
+      0 条因无共同信号而无法核实。语义支持性需 Tier 1。
+```
+
+> `weakly_supported` 这个档是实测逼出来的：最初设计成"跨语言一律弃权"，
+> 结果同一份综述 **17/21 落进"无法核实"** —— 中文综述引英文文献本来就是常态，
+> 对主要场景全部弃权的校验器等于没有校验器。修法是用**语言无关信号**
+> （数字/术语/缩写不随语言变化），既恢复判断力、又不冤枉正常引用。
+
+**校验器自身被衡量过**（人工标注集 27 条）：
+判定完全一致 **88.9%**，预期规则命中 **20/20**，
+**二分类 recall = 1.00（零漏报）、precision = 0.89**，
+`contradicted` 类 **P=R=1.00**。CI 门禁要求召回必须 1.0。
+
+**已知盲区（刻意保留在标注集里持续度量，而不是藏起来）**：语义改写
+（同语言上位词替换）会因词面重合过低被误报；跨语言且无任何共同术语时弃权（漏报）。
+这两条正是需要 Tier 1 / NLI 的原因。
 
 ---
 
@@ -729,7 +773,7 @@ medscholar-agent/
 ## 测试与工程质量
 
 ```bat
-.python\python.exe -m pytest tests -q               :: 608 个测试
+.python\python.exe -m pytest tests -q               :: 757 个测试
 .python\python.exe scripts\check.py                 :: 语法 + 模块导入 + 纯函数断言
 .python\python.exe scripts\check_bat.py             :: .bat 必须纯 ASCII + CRLF
 .python\python.exe -X utf8 scripts\smoke_http.py    :: 71 项真实 uvicorn 端到端
@@ -740,7 +784,7 @@ medscholar-agent/
 | 作业 | 平台 | 内容 |
 |---|---|---|
 | `lint` | ubuntu | `ruff`(F,E9) + `compileall` + `check.py` + `check_bat.py` |
-| `test` | windows / 3.13 | 687 个测试（与随包便携运行时同版本，保证"CI 绿 = 用户能用"） |
+| `test` | windows / 3.13 | 757 个测试（与随包便携运行时同版本，保证"CI 绿 = 用户能用"） |
 | **`eval`** | ubuntu | **检索质量回归**：消融评测 + 阈值门禁 + 与 `hybrid_search` 的一致性自检 |
 | `smoke` | windows | 真实 uvicorn，逐条核对 `docs/API.md`（离线、不联网） |
 | `package` | windows | 打包回归 + 断言分享包**不含 `data/`**（合规） |
@@ -753,6 +797,13 @@ medscholar-agent/
 .python\python.exe -m pip install pre-commit
 .python\python.exe -m pre_commit install
 ```
+
+**为什么静态检查只查 `F + E9`**：这是个**已跑通**的项目，把 3 万行代码一次性交给全部规则
+会产生几百条风格诊断（`BLE001` / `RUF022` / `UP035` …），真正有信息量的"未定义名"会被淹没。
+一个总在报红但没人看的门禁，等价于没有门禁。但规则必须**显式 pin 在 `pyproject.toml` 里**：
+ruff 的默认规则集会随版本变化（实测 0.16 的默认集已含扩展规则），不 pin 就会出现
+"本机 `ruff check .` 报 264 条、CI 报 0 条"这种无法复现也无法 review 的差异。
+顺带排除 `.python/`（随包便携运行时）——第三方代码不该出现在我的诊断列表里。
 
 **`eval` 作业为什么用哈希嵌入而不是真实模型**：CI 里装几 GB 的嵌入模型既慢又不稳定，
 一旦因为环境问题频繁红掉，大家就会开始习惯性忽略它。所以 CI 只做**确定性回归**
@@ -784,12 +835,27 @@ medscholar-agent/
 * **故意喂脏数据** —— 截断的 JSON、损坏的 tar、非法 JSON 的数据库字段、
   GBK 编码的导出文件、`example.com` 邮箱，都要有明确的降级行为而不是崩溃。
 
-**已建立的工程习惯**：`compileall` + `ruff`（F/E9）+ `check.py` 三件套、
+**已建立的工程习惯**：`compileall` + `ruff`（F/E9，规则 pin 在 `pyproject.toml` 里）+ `check.py` 三件套、
 每个新模块配套测试、`.bat` 纯 ASCII+CRLF 约定（已有守卫脚本强制）、
 静态资源 mtime 版本号、配置与代码同步（`config.example.yaml` 是唯一文档源）、
-**CI 五作业 + pre-commit 提交门禁**。
+**CI 六作业 + pre-commit 提交门禁**。
 
 **尚未建立的**：容器化、schema 迁移工具（见下节路线图）。
+
+### 控制台编码：只在"重定向"路径上出现的崩溃
+
+`check_bat.py` 打印 `✓`（U+2713），这个字符**不在 GBK 里**。真实控制台不会触发
+（Python 对控制台走 `WriteConsoleW`，绕开编码），但只要输出被**重定向或管道**接手，
+就按 ANSI 代码页（中文 Windows 是 cp936）编码 → `UnicodeEncodeError`，
+而且**崩在"校验通过"的打印上**，看起来像 `.bat` 有问题。CI 在 UTF-8 的 ubuntu 上永远不会发现。
+
+危险之处在于它是**守卫脚本**：守卫自己坏了比被守卫的东西坏了更糟。
+修法是 4 行 `reconfigure(encoding="utf-8", errors="replace")`
+（项目里 20 多个脚本早就有这行，**只有这一个漏了**——约定没有强制手段就会漂移）。
+
+回归测试用 `PYTHONIOENCODING=gbk` 起真实子进程，断言退出码为 0 且 stderr 无
+`UnicodeEncodeError`，并把 `cp1252` / `ascii` 参数化（更窄的编码只能降级，不能崩），
+见 [`tests/test_check_bat.py`](tests/test_check_bat.py)。
 
 ---
 
@@ -801,7 +867,7 @@ medscholar-agent/
 
 | 局限 | 具体表现 | 影响 |
 |---|---|---|
-| **检索评测只到文献级** | 有 recall@k / nDCG / MRR，但没有 **claim-level 忠实度**（`[n]` 是否真的支持那句话） | 引用"存在性"可查，"支持性"不可查；需要 NLI/LLM 逐句核验 |
+| **引用核查只到 Tier 0** | 有确定性的数字/方向/过度主张/弱证据规则，但**语义蕴含**（跨语言、上位词改写）仍需 Tier 1 的 LLM 裁判；NLI 模型路径未实现 | 中文综述引英文文献时只能给"弱证据通过"，不能确认语义支持 |
 | **没有端到端可观测性** | 有 LLM 分段耗时日志，但没有 trace、token/成本核算、失败分类 | 线上问题定位靠翻日志 |
 | **单进程、单写者** | agent 跑在 `asyncio.create_task`；SQLite 单写 | 进程崩溃丢当前阶段的中间结果；不能水平扩展 |
 | **无鉴权与多租户** | REST 全开放，无用户隔离、配额、审计 | 仅适合单机个人使用 |
@@ -815,17 +881,17 @@ medscholar-agent/
 1. ~~**CI + pre-commit**~~ ✅ **已完成**——6 个作业，含检索质量门禁与 `.bat` 换行符守卫。
 2. ~~**RAG 评估体系**~~ ✅ **已完成**——指标 + 消融 + 阴性对照 + CI 门禁，
    方法论与偏差说明见 [`docs/EVALUATION.md`](docs/EVALUATION.md)。
-   下一步是补 **claim-level 忠实度**（下面第 3 项）。
-3. **引用忠实度**（2~3 天）—— 用 NLI 模型或 LLM 逐句核验"这句话是否被所引文献支持"，
-   把现在的"引用存在性校验"升级为"引用支持性校验"。
-4. **可观测性**（2 天）—— OpenTelemetry 打点 + 每次运行的可视化 trace + token/成本核算 + 失败分类。
-5. **容器化 + schema 迁移**（1~2 天）—— Dockerfile 固化环境；Alembic 或轻量迁移表。
-6. **横向扩展**（1 周）—— PostgreSQL + pgvector、任务队列（Arq/Temporal）、无状态服务、语义缓存。
-7. **检索质量提升**（2~3 天）—— cross-encoder 重排、query 改写、chunk 策略消融。
+3. ~~**引用支持性（Tier 0）**~~ ✅ **已完成**——规则 + 校验器自评估 + CI 门禁。
+4. **引用支持性（Tier 1 / NLI）**（2~3 天）—— 用 NLI 模型或 LLM 裁判做真正的
+   蕴含判断，把跨语言与语义改写这两类盲区补上；并给出"忠实度"聚合指标。
+5. **可观测性**（2 天）—— OpenTelemetry 打点 + 每次运行的可视化 trace + token/成本核算 + 失败分类。
+6. **容器化 + schema 迁移**（1~2 天）—— Dockerfile 固化环境；Alembic 或轻量迁移表。
+7. **横向扩展**（1 周）—— PostgreSQL + pgvector、任务队列（Arq/Temporal）、无状态服务、语义缓存。
+8. **检索质量提升**（2~3 天）—— cross-encoder 重排、query 改写、chunk 策略消融。
    评测框架已就位，因此每一项都能立刻给出"涨了多少"的数字。
-8. **领域专业度**（持续）—— claim-evidence 逐句对齐、GRADE 证据分级、
-   PRISMA/CONSORT/STROBE 报告规范检查、统计报告一致性校验。
-9. **记忆升级**—— 从"单条纠错记忆"扩展到长期研究记忆（跨会话课题上下文、期刊/审稿人偏好）。
+9. **领域专业度**（持续）—— GRADE 证据分级、PRISMA/CONSORT/STROBE 报告规范检查、
+   统计报告一致性校验。
+10. **记忆升级**—— 从"单条纠错记忆"扩展到长期研究记忆（跨会话课题上下文、期刊/审稿人偏好）。
 
 ---
 
