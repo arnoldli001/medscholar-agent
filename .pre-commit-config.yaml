@@ -58,6 +58,13 @@ repos:
         files: ^(medscholar|scripts|tests)/.*\.py$
         pass_filenames: false
 
+      - id: medscholar-docs
+        name: 文档口径一致（材料里的关键数字不得互相打架）
+        entry: python -X utf8 scripts/check_docs.py
+        language: system
+        files: \.(md)$
+        pass_filenames: false
+
       - id: medscholar-arch
         name: 架构约束（分层方向 / 循环依赖 / 规模上限）
         # 依赖漂移只有机器抓得住：一个"为了赶需求"的跨层 import
