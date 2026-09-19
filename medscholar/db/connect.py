@@ -153,7 +153,61 @@ class Database:
         _ = self.conn
         self._create_base_schema()
         self._ensure_vector_table()
+        self._bootstrap_migrations()
         self._set_meta("schema_version", SCHEMA_VERSION)
+
+    def _bootstrap_migrations(self) -> None:
+        """建表之后跑一遍 schema 迁移，并把版本历史对齐到 ``schema_migrations``。
+
+        为什么顺序是"先 schema.sql 后迁移"：``schema.sql`` 用
+        ``CREATE TABLE IF NOT EXISTS`` 描述的是**当前**结构，它对已有的 400+ 篇
+        文献的库是无害的（不会重建已有表）；迁移要解决的是它解决不了的那部分 ——
+        老库可能是**旧结构**，需要按版本有序地补索引/补列，并且这个"补"的过程
+        必须可重复执行、可回滚、可观测。所以：结构交给 schema.sql 铺底，
+        版本化的演进交给迁移。
+
+        为什么这里**不**做迁移前备份（``backup=False``）：启动路径上每次打开库
+        都复制一遍文件是纯浪费，而 ``init_database`` 里的迁移通常只是"登记基线"。
+        真正会改动结构的迁移由 ``python -m medscholar.db.migrate --apply`` 执行，
+        那条路径默认备份。
+
+        为什么迁移失败**只告警、不抛异常**：这个方法在 ``Database()`` 构造里，
+        抛异常等于整个应用打不开 —— 用户会因为一次索引没建成而彻底失去工具
+        （连自己的 400 篇文献都看不到）。这里的取舍是"功能可用优先"：
+        记录 WARNING + 在 ``schema_migrations`` 里留下 ``success=0`` 的失败行，
+        让问题可见、可排查、可重试。
+        """
+        from .migrate import MigrationError, apply_migrations
+
+        try:
+            has_data = bool(self.scalar("SELECT COUNT(*) FROM papers", default=0))
+        except sqlite3.Error:  # pragma: no cover - papers 缺失时交给迁移的基线检查报错
+            has_data = False
+        try:
+            result = apply_migrations(
+                self.conn,
+                backup=False,
+                # 库里已经有文献时不因为"有人改过已发布的迁移"把应用挡在门外：
+                # 用户的库是**不能丢**的资产，"能打开"优先于"立刻报错"。
+                # 全新/空库仍然走严格模式，让开发期立刻发现问题。
+                allow_checksum_change=has_data,
+            )
+        except MigrationError:
+            logger.exception("数据库迁移失败，已跳过；库结构可能落后于代码，请手工检查")
+            return
+        if result["applied"]:
+            logger.info(
+                "数据库迁移完成：%s → M%04d",
+                [item["version"] for item in result["applied"]],
+                result["current_version"],
+            )
+        if result["failed"] is not None:
+            logger.warning(
+                "迁移 M%04d %s 未完成：%s",
+                result["failed"]["version"],
+                result["failed"]["name"],
+                result["failed"]["error"],
+            )
 
     def _create_base_schema(self) -> None:
         sql = _SCHEMA_FILE.read_text(encoding="utf-8")

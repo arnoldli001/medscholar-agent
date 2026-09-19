@@ -20,15 +20,24 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import re
+import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Mapping, Sequence
 
 import httpx
 
-from ..config import AppConfig, LLMSettings, get_config
+from ..platform.config import AppConfig, LLMSettings, get_config
+from ..platform.observability import (
+    LEDGER,
+    LLMUsage,
+    current_span,
+    current_trace,
+)
+from .errors import LLMError
+from .ollama_backend import OllamaBackend
+from .openai_backend import OpenAIBackend
+from .transport import breaker_for
 
 logger = logging.getLogger(__name__)
 
@@ -36,185 +45,10 @@ __all__ = ["Message", "LLMClient", "LLMError", "get_llm", "reset_llm", "extract_
 
 Message = Mapping[str, str]
 
-
-class LLMError(RuntimeError):
-    """LLM 调用失败。"""
-
-
-_FENCE_RE = re.compile(r"```(?:json|JSON)?\s*(.*?)```", re.DOTALL)
-
-
-def extract_json(text: str, *, expect: str = "any") -> Any:
-    """从模型输出中尽力提取 JSON。
-
-    依次尝试：直接解析 → 剥离 Markdown 围栏 → 截取首个平衡的 ``{...}`` 或 ``[...]``
-    → 补全被截断的对象 → 修复尾随逗号 / 中文引号后重试。
-
-    ``expect`` 为 ``"object"`` 或 ``"array"`` 时会**只**接受该形状的顶层结果。
-    这一点很关键：实测 qwen3:8b 生成 ``queries`` 时写坏过 JSON，而残缺对象里
-    第一个配平的 ``[...]`` 恰好是 ``pico.outcomes``；若不限定形状，就会把
-    结局指标数组当成整份计划返回，``topic_zh`` / ``queries`` / ``outline`` 全部丢失。
-    """
-    if not text:
-        raise LLMError("模型返回为空，无法解析 JSON")
-    text = text.strip()
-
-    last_error: json.JSONDecodeError | None = None
-    for candidate in _json_candidates(text):
-        parsed: Any = None
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError as exc:
-            last_error = exc
-            fixed = _repair(candidate)
-            if fixed != candidate:
-                try:
-                    parsed = json.loads(fixed)
-                except json.JSONDecodeError:
-                    continue
-            else:
-                continue
-        if _matches(parsed, expect):
-            return parsed
-
-    want = {"object": "JSON 对象", "array": "JSON 数组"}.get(expect, "JSON")
-    detail = f"（{last_error}）" if last_error else ""
-    raise LLMError(f"无法从模型输出中解析出{want}{detail}：{text[:400]}")
-
-
-def _matches(value: Any, expect: str) -> bool:
-    """顶层形状是否符合调用方的期望。"""
-    if expect == "object":
-        return isinstance(value, dict)
-    if expect == "array":
-        return isinstance(value, list)
-    return True
-
-
-def _leading_opener(text: str) -> str | None:
-    """文本自己声明的顶层形状：第一个非空白字符是 ``{`` 还是 ``[``。"""
-    for ch in text:
-        if ch in "{[":
-            return ch
-        if not ch.isspace():
-            return None
-    return None
-
-
-def _close_truncated(fragment: str) -> str | None:
-    """补全被截断的 JSON：退到最后一个完整的值，再补上未闭合的括号。
-
-    本地小模型偶尔会在生成到一半时陷入空白循环，把 token 预算烧完（实测
-    qwen3:8b 在 ``"queries"`` 里输出 ``"query": "("`` 之后就只剩换行）。
-    这时整个对象虽然不合法，但前面已经生成好的 ``topic_zh`` / ``pico``
-    都是完好的，值得捞回来。
-    """
-    stack: list[str] = []
-    in_string = False
-    escaped = False
-    cut = -1  # 最后一个完整值的结束位置
-    for index, ch in enumerate(fragment):
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-                cut = index + 1
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch in "{[":
-            stack.append("}" if ch == "{" else "]")
-        elif ch in "}]":
-            if not stack:
-                return None
-            stack.pop()
-            if not stack:
-                return None  # 顶层已经闭合，说明不是截断
-            cut = index + 1
-        elif ch == "," and stack:
-            cut = index
-    if in_string or not stack or cut <= 0:
-        return None
-    # 回退到最后一个完整值，去掉悬空的逗号与半截成员
-    repaired = fragment[:cut].rstrip().rstrip(",")
-    return repaired + "".join(reversed(stack))
-
-
-def _json_candidates(text: str) -> list[str]:
-    bases = [text]
-    fenced = _FENCE_RE.search(text)
-    if fenced:
-        bases.append(fenced.group(1).strip())
-
-    # 只按文本自己声明的形状找块：以 `{` 开头就只认对象。否则残缺对象里第一个
-    # 配平的 `[...]` 会被当成答案（见 extract_json 的说明）。
-    lead = _leading_opener(text)
-    if lead == "{":
-        pairs = [("{", "}")]
-    elif lead == "[":
-        pairs = [("[", "]")]
-    else:
-        pairs = [("{", "}"), ("[", "]")]
-
-    candidates: list[str] = list(bases)
-    for base in bases:
-        for opener, closer in pairs:
-            block = _balanced_block(base, opener, closer)
-            if block:
-                candidates.append(block)
-                continue  # 已配平，无需再尝试补全
-            start = base.find(opener)
-            if start >= 0:
-                closed = _close_truncated(base[start:])
-                if closed:
-                    candidates.append(closed)
-
-    seen: set[str] = set()
-    unique: list[str] = []
-    for item in candidates:
-        if item and item not in seen:
-            seen.add(item)
-            unique.append(item)
-    return unique
-
-
-def _balanced_block(text: str, opener: str, closer: str) -> str | None:
-    """截取第一个括号配平的块（跳过字符串字面量内的括号）。"""
-    start = text.find(opener)
-    if start < 0:
-        return None
-    depth = 0
-    in_string = False
-    escaped = False
-    for index in range(start, len(text)):
-        ch = text[index]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == opener:
-            depth += 1
-        elif ch == closer:
-            depth -= 1
-            if depth == 0:
-                return text[start : index + 1]
-    return None
-
-
-def _repair(text: str) -> str:
-    """修复常见 JSON 瑕疵：尾随逗号、中文引号。"""
-    repaired = re.sub(r",\s*([}\]])", r"\1", text)
-    repaired = repaired.replace("“", '"').replace("”", '"')
-    return repaired
+# JSON 容错解析已拆到 medscholar/llm/json_parsing.py（纯算法、单独测试）。
+# 这里继续重导出 extract_json：它是既有调用方与测试在用的名字。
+from .json_parsing import extract_json  # noqa: E402  (重导出：对外 API 不变)
+# LLMError 定义在 errors.py（为断开 json_parsing ↔ client 的环），此处重导出。
 
 
 @dataclass(slots=True)
@@ -227,8 +61,13 @@ class _Usage:
         self.completion_tokens += completion
 
 
-class LLMClient:
-    """按配置路由到具体后端的统一客户端。"""
+class LLMClient(OllamaBackend, OpenAIBackend):
+    """按配置路由到具体后端的统一客户端。
+
+    出网调用的**重试与熔断**在 :mod:`medscholar.llm.transport`，
+    **耗时与 token 记账**在 :mod:`medscholar.platform.observability`；
+    本类只负责"报文长什么样、错误文案怎么说"。
+    """
 
     def __init__(self, settings: LLMSettings | None = None, *, config: AppConfig | None = None) -> None:
         self.config = config or get_config()
@@ -237,6 +76,10 @@ class LLMClient:
         self._client_loop: asyncio.AbstractEventLoop | None = None
         self.usage = _Usage()
         self.calls = 0
+        # 熔断按后端隔离：key 里带上 model，这样"换一个模型"不会被上一个模型的
+        # 连续失败拖累（实测场景：qwen3:8b 未拉取导致 400，换成已装模型仍应可用）。
+        self._breaker_key = f"{self.settings.provider}|{self.settings.model}|{self.settings.base_url}"
+        self.breaker = breaker_for(self._breaker_key)
 
     # ------------------------------------------------------------ 生命周期
     async def __aenter__(self) -> "LLMClient":
@@ -323,6 +166,45 @@ class LLMClient:
             "has_api_key": bool(self.settings.api_key),
             "temperature": self.settings.temperature,
         }
+
+    # ------------------------------------------------------------ 记账
+    def _record(
+        self,
+        *,
+        prompt_tokens: int,
+        completion_tokens: int,
+        started: float,
+        ok: bool = True,
+        error_kind: str = "",
+    ) -> None:
+        """记一次调用到全局账本 + 本地累计器。
+
+        **成功与失败都记**：只统计成功调用会得到"平均耗时很漂亮、实际体验很差"的
+        假象（慢的往往正是失败重试的那几次）。失败时 token 记 0，
+        但耗时与错误分类照记，这样"哪个阶段在烧钱/在超时"才看得出来。
+
+        阶段（plan/execute/reflect/synthesize）与运行号从当前 trace 上下文推断，
+        调用方不必为了记账多传参数。账本是纯内存操作，不会拖慢主流程。
+        """
+        latency_ms = (time.monotonic() - started) * 1000
+        if ok:
+            self.calls += 1
+            self.usage.add(prompt_tokens, completion_tokens)
+        span = current_span()
+        trace = current_trace()
+        LEDGER.record(
+            LLMUsage(
+                provider=self.settings.provider,
+                model=self.settings.model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                latency_ms=latency_ms,
+                ok=ok,
+                phase=span.name if span is not None else "",
+                run_id=trace.trace_id if trace is not None else "",
+                error_kind=error_kind,
+            )
+        )
 
     # ---------------------------------------------------------------- 对话
     async def chat(
@@ -421,261 +303,6 @@ class LLMClient:
             raise LLMError("消息列表为空")
         return prepared
 
-    # ------------------------------------------------------------- Ollama
-    async def _ollama_chat(
-        self,
-        messages: list[dict[str, str]],
-        temperature: float | None,
-        max_tokens: int | None,
-        json_mode: bool,
-        *,
-        stream: bool,
-    ) -> str:
-        payload: dict[str, Any] = {
-            "model": self.settings.model,
-            "messages": messages,
-            "stream": stream,
-            "think": bool(self.settings.think),
-            "keep_alive": self.settings.keep_alive,
-            "options": self._ollama_options(temperature, max_tokens),
-        }
-        if json_mode:
-            payload["format"] = "json"
-
-        try:
-            response = await self.client.post("/api/chat", json=payload)
-        except httpx.TransportError as exc:
-            raise LLMError(
-                f"无法连接 Ollama（{self._resolve_base_url()}）：{exc}\n"
-                "请确认已安装并运行 Ollama：`ollama serve`，"
-                f"以及已拉取模型：`ollama pull {self.settings.model}`"
-            ) from exc
-
-        if response.status_code >= 400:
-            raise LLMError(await self._ollama_error(response))
-
-        data = response.json()
-        self.calls += 1
-        self.usage.add(
-            int(data.get("prompt_eval_count") or 0), int(data.get("eval_count") or 0)
-        )
-        self._log_timing(data)
-        return str((data.get("message") or {}).get("content") or "")
-
-    def _log_timing(self, data: Mapping[str, Any]) -> None:
-        """把 Ollama 的分段耗时写进日志。
-
-        没有这些数字时，「规划很慢」只能靠猜：真正的元凶可能是模型重新加载
-        （keep_alive 到期）、显存不足、或系统内存吃紧导致权重页被换出。
-        """
-        try:
-            load = float(data.get("load_duration") or 0) / 1e9
-            prompt = float(data.get("prompt_eval_duration") or 0) / 1e9
-            gen = float(data.get("eval_duration") or 0) / 1e9
-            gen_tokens = int(data.get("eval_count") or 0)
-            prompt_tokens = int(data.get("prompt_eval_count") or 0)
-            speed = gen_tokens / gen if gen else 0.0
-            logger.info(
-                "LLM 耗时：加载 %.1fs | 提示 %.1fs(%d tok) | 生成 %.1fs(%d tok, %.1f tok/s)",
-                load,
-                prompt,
-                prompt_tokens,
-                gen,
-                gen_tokens,
-                speed,
-            )
-            if load > 20:
-                # 重新加载模型是纯浪费，且往往比生成本身还慢
-                logger.warning(
-                    "模型重新加载耗时 %.0fs（keep_alive=%s）。"
-                    "把 llm.keep_alive 调大（如 30m）可避免反复加载。",
-                    load,
-                    self.settings.keep_alive,
-                )
-            if gen_tokens >= 50 and speed < 10:
-                logger.warning(
-                    "生成速度仅 %.1f tok/s，远低于本机应有水平（8B 模型在 RTX 4060 上约 45 tok/s）。"
-                    "常见原因：系统内存不足导致模型权重被换出、或 GPU 被桌面/浏览器抢占。",
-                    speed,
-                )
-        except Exception:  # pragma: no cover - 遥测失败绝不影响主流程
-            logger.debug("耗时统计失败", exc_info=True)
-
-    async def _ollama_stream(
-        self,
-        messages: list[dict[str, str]],
-        temperature: float | None,
-        max_tokens: int | None,
-    ) -> AsyncIterator[str]:
-        payload = {
-            "model": self.settings.model,
-            "messages": messages,
-            "stream": True,
-            "think": bool(self.settings.think),
-            "keep_alive": self.settings.keep_alive,
-            "options": self._ollama_options(temperature, max_tokens),
-        }
-        try:
-            async with self.client.stream("POST", "/api/chat", json=payload) as response:
-                if response.status_code >= 400:
-                    body = await response.aread()
-                    raise LLMError(
-                        f"Ollama 返回 HTTP {response.status_code}：{body.decode('utf-8', 'replace')[:200]}"
-                    )
-                async for line in response.aiter_lines():
-                    if not line.strip():
-                        continue
-                    try:
-                        chunk = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    piece = (chunk.get("message") or {}).get("content") or ""
-                    if piece:
-                        yield piece
-                    if chunk.get("done"):
-                        self.calls += 1
-                        self.usage.add(
-                            int(chunk.get("prompt_eval_count") or 0),
-                            int(chunk.get("eval_count") or 0),
-                        )
-                        break
-        except httpx.TransportError as exc:
-            raise LLMError(
-                f"连接 Ollama 失败：{exc}。请确认 `ollama serve` 正在运行。"
-            ) from exc
-
-    def _ollama_options(self, temperature: float | None, max_tokens: int | None) -> dict[str, Any]:
-        return {
-            "temperature": self.settings.temperature if temperature is None else temperature,
-            "top_p": self.settings.top_p,
-            "num_predict": max_tokens or self.settings.max_tokens,
-            "num_ctx": self.settings.num_ctx,
-        }
-
-    async def _ollama_error(self, response: httpx.Response) -> str:
-        detail = response.text[:300]
-        try:
-            available = (await self.client.get("/api/tags")).json().get("models", [])
-            names = [m.get("name", "") for m in available]
-        except Exception:  # pragma: no cover
-            names = []
-        hint = ""
-        if names and self.settings.model not in names:
-            hint = (
-                f"\n当前已安装模型：{', '.join(names[:8])}\n"
-                f"请执行 `ollama pull {self.settings.model}`，"
-                f"或把 config.yaml 的 llm.model 改为已安装的模型。"
-            )
-        return f"Ollama 返回 HTTP {response.status_code}：{detail}{hint}"
-
-    # --------------------------------------------------- OpenAI 兼容（DeepSeek）
-    def _openai_payload(
-        self,
-        messages: list[dict[str, str]],
-        temperature: float | None,
-        max_tokens: int | None,
-        json_mode: bool,
-        *,
-        stream: bool,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "model": self.settings.model,
-            "messages": messages,
-            "temperature": self.settings.temperature if temperature is None else temperature,
-            "top_p": self.settings.top_p,
-            "max_tokens": max_tokens or self.settings.max_tokens,
-            "stream": stream,
-        }
-        if json_mode:
-            payload["response_format"] = {"type": "json_object"}
-        return payload
-
-    async def _openai_chat(
-        self,
-        messages: list[dict[str, str]],
-        temperature: float | None,
-        max_tokens: int | None,
-        json_mode: bool,
-    ) -> str:
-        payload = self._openai_payload(messages, temperature, max_tokens, json_mode, stream=False)
-        try:
-            response = await self.client.post("/chat/completions", json=payload)
-        except httpx.TransportError as exc:
-            raise LLMError(f"连接 {self.settings.provider} 失败：{exc}") from exc
-        if response.status_code >= 400:
-            raise LLMError(
-                f"{self.settings.provider} 返回 HTTP {response.status_code}：{response.text[:300]}"
-            )
-        data = response.json()
-        self.calls += 1
-        usage = data.get("usage") or {}
-        self.usage.add(
-            int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
-        )
-        choices = data.get("choices") or []
-        if not choices:
-            raise LLMError(f"{self.settings.provider} 未返回 choices：{str(data)[:200]}")
-
-        choice = choices[0]
-        message = choice.get("message") or {}
-        content = str(message.get("content") or "")
-        reasoning = str(message.get("reasoning_content") or message.get("reasoning") or "")
-        finish = str(choice.get("finish_reason") or "")
-
-        # 云端推理模型（DeepSeek 的 deepseek-flash / deepseek-v4-pro 都是）会把
-        # 思维链放在独立的 reasoning_content 字段里，content 只放最终答案。
-        # 如果 max_tokens 不够，模型会把预算全花在思考上，content 直接是空字符串 ——
-        # 早期版本会**静默返回空文本**，表现为"综述一个字都没写"却没有任何报错。
-        if not content.strip():
-            if finish == "length":
-                raise LLMError(
-                    f"{self.settings.provider}/{self.settings.model} 输出为空："
-                    f"max_tokens={payload.get('max_tokens')} 全部被思维链消耗掉了。\n"
-                    f"    该模型是推理模型，思维链与正文共用 max_tokens 配额。\n"
-                    f"    请在 config.yaml 中把 llm.max_tokens 调大（建议 ≥4000），"
-                    f"或改用非推理模型。"
-                )
-            if reasoning.strip():
-                raise LLMError(
-                    f"{self.settings.provider}/{self.settings.model} 只返回了思维链、没有正文"
-                    f"（finish_reason={finish or '未知'}）。请调大 llm.max_tokens 后重试。"
-                )
-        if reasoning:
-            logger.debug("模型返回了 %d 字思维链（已忽略，只用 content）", len(reasoning))
-        return content
-
-    async def _openai_stream(
-        self,
-        messages: list[dict[str, str]],
-        temperature: float | None,
-        max_tokens: int | None,
-    ) -> AsyncIterator[str]:
-        payload = self._openai_payload(messages, temperature, max_tokens, False, stream=True)
-        try:
-            async with self.client.stream("POST", "/chat/completions", json=payload) as response:
-                if response.status_code >= 400:
-                    body = await response.aread()
-                    raise LLMError(
-                        f"{self.settings.provider} 返回 HTTP {response.status_code}："
-                        f"{body.decode('utf-8', 'replace')[:300]}"
-                    )
-                async for line in response.aiter_lines():
-                    line = line.strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-                    for choice in chunk.get("choices") or []:
-                        piece = (choice.get("delta") or {}).get("content")
-                        if piece:
-                            yield piece
-        except httpx.TransportError as exc:
-            raise LLMError(f"连接 {self.settings.provider} 失败：{exc}") from exc
 
     # ---------------------------------------------------------------- 自检
     async def health(self) -> tuple[bool, str]:

@@ -35,8 +35,13 @@ try:
 except (AttributeError, OSError):  # pragma: no cover
     pass
 
-# 必须在导入 medscholar 之前指定数据目录
-SANDBOX = Path(tempfile.gettempdir()) / "medscholar_smoke"
+# 必须在导入 medscholar 之前指定数据目录。
+#
+# **沙箱目录必须带 PID**：固定目录 + "启动时先 rmtree" 的组合，在两次冒烟同时跑时
+# 会互相删掉对方的数据 —— 实测踩到过：我自己跑一次、另一个进程（并行改造/CI）跑一次，
+# 结果是"DELETE /api/papers 返回 deleted=0"这种看着像业务 bug、实为测试互相踩的失败。
+# 这类失败最误导人：它出现在你最忙的时候，而且重跑就好了，于是没人去查。
+SANDBOX = Path(tempfile.gettempdir()) / f"medscholar_smoke_{os.getpid()}"
 if SANDBOX.exists():
     shutil.rmtree(SANDBOX, ignore_errors=True)
 SANDBOX.mkdir(parents=True, exist_ok=True)

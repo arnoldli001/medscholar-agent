@@ -1,33 +1,10 @@
-"""引用格式化与导出。"""
+"""引用格式化（6 种格式：APA7 / Vancouver / GB-T 7714 / Chicago / BibTeX / RIS）
+
+实现已迁至 :mod:`medscholar.domain.citation`，本模块保留为**兼容外壳**（理由见
+``medscholar/domain/citation/__init__.py`` 与本文件同名的说明）。
+"""
 
 from __future__ import annotations
 
-from .styles import (
-    STYLE_LABELS,
-    STYLES,
-    citation_key,
-    detect_style,
-    format_authors,
-    format_citation,
-    format_inline,
-    format_records,
-    format_reference_list,
-    split_author,
-    to_bibtex,
-    to_ris,
-)
-
-__all__ = [
-    "STYLES",
-    "STYLE_LABELS",
-    "detect_style",
-    "split_author",
-    "format_authors",
-    "format_citation",
-    "format_inline",
-    "format_reference_list",
-    "format_records",
-    "citation_key",
-    "to_bibtex",
-    "to_ris",
-]
+from medscholar.domain.citation import *  # noqa: F401,F403
+from medscholar.domain.citation import __all__ as __all__  # noqa: F401

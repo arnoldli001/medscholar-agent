@@ -304,8 +304,8 @@ async def _index_local_pdfs(
 
     只处理**本地已存在**的文件；读不到就跳过，绝不联网补齐。
     """
-    from ..agent.reader import extract_pdf_text
     from ..db.repo import find_paper_id, save_fulltext
+    from .pdf import extract_pdf_text
 
     database = db or get_db()
     indexed = 0

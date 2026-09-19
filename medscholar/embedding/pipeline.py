@@ -21,7 +21,10 @@ from typing import Any, Sequence
 
 from ..config import AppConfig, get_config
 from ..db.connect import Database, get_db
-from ..db.repo import get_paper, papers_missing_embeddings, store_embeddings
+# 直接依赖数据层的具体模块，而不是 db.repo 门面：门面是给历史调用点用的，
+# 新代码走子模块可以让依赖图更精确（也让架构校验看得清真实边界）。
+from ..db.repositories.embeddings import papers_missing_embeddings, store_embeddings
+from ..db.repositories.papers import get_paper
 from .providers import EmbeddingProvider, get_provider
 
 logger = logging.getLogger(__name__)
@@ -259,16 +262,38 @@ def embed_paper(
 async def embed_query(
     text: str, *, config: AppConfig | None = None
 ) -> list[float] | None:
-    """把检索词转成查询向量；提供方不可用时返回 ``None``（调用方退化为纯 BM25）。"""
+    """把检索词转成查询向量；提供方不可用时返回 ``None``（调用方退化为纯 BM25）。
+
+    **带缓存**：同一个检索词会被反复嵌入（用户在左栏改一个词、切换筛选、
+    或者点两次检索），而每次嵌入都是一次真实的模型/网络调用。
+    缓存按 ``(provider, model, text)`` 做键 —— 必须带上模型名，
+    否则换了嵌入模型之后会拿到上一个模型的向量，而**维度相同、数值不同**的向量
+    不会报错，只会让检索结果悄悄变差。
+
+    失效策略：TTL 默认 1 小时（上面的键已经含模型名，所以换模型天然不会串），
+    且进程重启即失效 —— 查询向量便宜、且没有跨进程一致性问题。
+    """
+    from ..platform.cache import cache_registry
+
     text = (text or "").strip()
     if not text:
         return None
     provider = _get_provider(config)
+    cache = cache_registry("embed_query", ttl=3600.0, maxsize=256)
+    cache_key = f"{provider.name}|{provider.model}|{text}"
+
+    cached_vector = cache.get(cache_key)
+    if cached_vector is not None:
+        return list(cached_vector)
+
     try:
-        return await provider.embed_one(text)
+        vector = await provider.embed_one(text)
     except Exception as exc:
         logger.warning("查询向量生成失败，将退化为纯关键词检索：%s", exc)
         return None
+    if vector:
+        cache.set(cache_key, list(vector))
+    return vector
 
 
 async def embedding_status(config: AppConfig | None = None) -> dict[str, Any]:

@@ -57,3 +57,12 @@ repos:
         language: system
         files: ^(medscholar|scripts|tests)/.*\.py$
         pass_filenames: false
+
+      - id: medscholar-arch
+        name: 架构约束（分层方向 / 循环依赖 / 规模上限）
+        # 依赖漂移只有机器抓得住：一个"为了赶需求"的跨层 import
+        # 不会体现在业务逻辑的 diff 里，评审时几乎必然漏过。
+        entry: python -X utf8 scripts/check_arch.py
+        language: system
+        files: ^medscholar/.*\.py$
+        pass_filenames: false

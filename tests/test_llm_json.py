@@ -12,7 +12,8 @@ import json
 
 import pytest
 
-from medscholar.llm.client import LLMError, _close_truncated, extract_json
+from medscholar.llm.client import extract_json as client_extract_json
+from medscholar.llm.json_parsing import LLMError, _close_truncated, _json_candidates, extract_json
 
 # 真实抓取的截断输出（模型在 "query": "(" 之后一直输出空白直到预算耗尽）
 TRUNCATED_PLAN = (
@@ -60,8 +61,6 @@ class TestExtractJsonShape:
         残缺对象里第一个配平的 [...] 是 pico.outcomes，把它当答案会静默丢掉
         topic_zh / queries / outline。
         """
-        from medscholar.llm.client import _json_candidates
-
         assert all(not c.lstrip().startswith("[") for c in _json_candidates(MALFORMED_PLAN))
         with pytest.raises(LLMError):
             extract_json(MALFORMED_PLAN)
@@ -165,3 +164,10 @@ class TestTruncatedPlanEndToEnd:
 
         plan = ResearchPlan.from_dict({"queries": [{"query": "("}]})
         assert plan.queries == []
+
+class TestReExport:
+    """client.extract_json 必须仍可用：它是 medscholar.llm.__init__ 与
+    既有调用方在用的公开名字（搬迁不应改变对外 API）。"""
+
+    def test_client_reexports_same_function(self):
+        assert client_extract_json is extract_json
