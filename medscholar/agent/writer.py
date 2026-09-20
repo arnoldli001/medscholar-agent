@@ -18,6 +18,28 @@ import re
 from typing import Any, Sequence
 
 from ..config import AppConfig, get_config
+from ..constants import (
+    BODY_TRUNCATE_SUMMARY,
+    CHARS_PER_TOKEN,
+    CITATION_RANGE_MAX_SPAN,
+    DEFAULT_SECTION_COUNT,
+    DIGEST_MAX_ABSTRACT_OUTLINE,
+    LLM_MAX_TOKENS_ABSTRACT,
+    LLM_MAX_TOKENS_OUTLINE,
+    LLM_MAX_TOKENS_SUMMARY,
+    LLM_TEMPERATURE_ABSTRACT,
+    LLM_TEMPERATURE_OUTLINE,
+    LLM_TEMPERATURE_SECTION,
+    LLM_TEMPERATURE_SUMMARY,
+    MAX_TOKEN_CAP,
+    MIN_BUDGET,
+    MIN_HEADROOM,
+    MIN_TOKEN_CAP,
+    SECTION_CHARS_GAP,
+    SECTION_MIN_CHARS,
+    TOKEN_RESERVE,
+    TOKEN_SAFETY_MARGIN,
+)
 from ..llm.client import LLMError, get_llm
 from ..llm.prompts import (
     OUTLINE_SYSTEM,
@@ -56,8 +78,8 @@ def _fit_digest(
     system_prompt: str,
 ) -> str:
     """在上下文预算内构造材料块：优先保正文篇幅，其次保材料丰富度。"""
-    budget = num_ctx - want_output_tokens - estimate_tokens(system_prompt) - 256
-    budget = max(900, budget)
+    budget = num_ctx - want_output_tokens - estimate_tokens(system_prompt) - TOKEN_RESERVE
+    budget = max(MIN_BUDGET, budget)
     digest = ""
     for papers_cap, abstract in _DIGEST_LADDER:
         subset = list(entries[:papers_cap])
@@ -96,7 +118,7 @@ class WriterAgent:
             return list(fallback) or _default_outline()
 
         digest = build_context_digest(
-            entries[:20], max_abstract=280
+            entries[:20], max_abstract=DIGEST_MAX_ABSTRACT_OUTLINE
         )
         try:
             client = get_llm(self.config)
@@ -106,13 +128,13 @@ class WriterAgent:
                     {
                         "role": "user",
                         "content": outline_user(
-                            topic, digest, section_count=len(fallback) or 5
+                            topic, digest, section_count=len(fallback) or DEFAULT_SECTION_COUNT
                         ),
                     }
                 ],
                 system=OUTLINE_SYSTEM,
-                temperature=0.2,
-                max_tokens=1200,
+                temperature=LLM_TEMPERATURE_OUTLINE,
+                max_tokens=LLM_MAX_TOKENS_OUTLINE,
             )
             sections = _parse_outline(payload)
             if sections:
@@ -159,11 +181,11 @@ class WriterAgent:
         if total_max_chars and total_max_chars > 0:
             total_min = total_min_chars if total_min_chars > 0 else int(total_max_chars * 0.6)
             total_min = min(total_min, total_max_chars)
-            min_chars = max(200, total_min // section_count)
-            max_chars = max(min_chars + 150, total_max_chars // section_count)
+            min_chars = max(SECTION_MIN_CHARS, total_min // section_count)
+            max_chars = max(min_chars + SECTION_CHARS_GAP, total_max_chars // section_count)
 
         # 单节输出需要的 token 数：实测 qwen3 中文约 1.7 字/token，留出余量
-        want_tokens = int(max_chars / 1.5) + 200
+        want_tokens = int(max_chars / CHARS_PER_TOKEN) + TOKEN_SAFETY_MARGIN
         digest = _fit_digest(
             entries,
             num_ctx=self.config.llm.num_ctx,
@@ -172,8 +194,8 @@ class WriterAgent:
         )
         prompt_tokens = estimate_tokens(digest) + estimate_tokens(SECTION_SYSTEM)
         # 剩余可生成量：绝不能让提示词把输出挤到 0（早期"只写了几百字"就有这个原因）
-        headroom = max(600, self.config.llm.num_ctx - prompt_tokens - 256)
-        token_cap = max(600, min(want_tokens, headroom, 6144))
+        headroom = max(MIN_HEADROOM, self.config.llm.num_ctx - prompt_tokens - TOKEN_RESERVE)
+        token_cap = max(MIN_TOKEN_CAP, min(want_tokens, headroom, MAX_TOKEN_CAP))
         logger.info(
             "写作预算：正文目标 %d~%d 字（%d 节，每节 %d~%d 字）| "
             "材料约 %d token | 单节生成上限 %d token",
@@ -219,7 +241,7 @@ class WriterAgent:
                 async for chunk in client.stream(
                     [{"role": "user", "content": prompt}],
                     system=SECTION_SYSTEM,
-                    temperature=0.35,
+                    temperature=LLM_TEMPERATURE_SECTION,
                     max_tokens=token_cap,
                 ):
                     body += chunk
@@ -270,8 +292,8 @@ class WriterAgent:
                         }
                     ],
                     system=system,
-                    temperature=0.3,
-                    max_tokens=600,
+                    temperature=LLM_TEMPERATURE_ABSTRACT,
+                    max_tokens=LLM_MAX_TOKENS_ABSTRACT,
                 )
             ).strip()
         except LLMError as exc:
@@ -289,10 +311,10 @@ class WriterAgent:
         await client.start()
         return (
             await client.chat(
-                [{"role": "user", "content": summary_user(body[:12000], topic=topic)}],
+                [{"role": "user", "content": summary_user(body[:BODY_TRUNCATE_SUMMARY], topic=topic)}],
                 system=SUMMARY_SYSTEM,
-                temperature=0.2,
-                max_tokens=900,
+                temperature=LLM_TEMPERATURE_SUMMARY,
+                max_tokens=LLM_MAX_TOKENS_SUMMARY,
             )
         ).strip()
 
@@ -312,7 +334,7 @@ def extract_citations(text: str) -> list[int]:
             range_match = re.match(r"^(\d+)\s*[-–]\s*(\d+)$", token)
             if range_match:
                 start, end = int(range_match.group(1)), int(range_match.group(2))
-                if 0 < start <= end <= start + 50:
+                if 0 < start <= end <= start + CITATION_RANGE_MAX_SPAN:
                     found.extend(range(start, end + 1))
                 continue
             if token.isdigit():

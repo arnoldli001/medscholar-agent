@@ -19,6 +19,21 @@ from typing import Any, Awaitable, Callable, Sequence
 
 from ..cite import detect_style
 from ..config import AppConfig, get_config
+from ..constants import (
+    DIGEST_MAX_ABSTRACT_REVIEW,
+    DIGEST_MAX_ABSTRACT_REVISE,
+    DRAFT_TRUNCATE_REVIEW,
+    DRAFT_TRUNCATE_REVISE,
+    FEEDBACK_TRUNCATE,
+    LLM_MAX_TOKENS_PLAN,
+    LLM_MAX_TOKENS_REVIEW,
+    LLM_TEMPERATURE_PLAN,
+    LLM_TEMPERATURE_REVIEW,
+    LLM_TEMPERATURE_REVISE,
+    MAX_ERRORS_SNAPSHOT,
+    MAX_ISSUES_REVISE,
+    REVISE_MIN_LENGTH_RATIO,
+)
 from ..db.connect import Database, get_db
 from ..db.repo import add_message, save_artifact
 from ..llm.client import LLMError, get_llm
@@ -136,7 +151,7 @@ class ResearchGraph:
                 if decision == "revise" and feedback.strip():
                     state.plan.feedback = feedback.strip()
                     await emit_event(
-                        emit, "status", message=f"按用户意见调整检索策略：{feedback[:80]}"
+                        emit, "status", message=f"按用户意见调整检索策略：{feedback[:FEEDBACK_TRUNCATE]}"
                     )
                     state.plan = await self.plan(state, emit=emit, feedback=feedback.strip())
                     await emit_event(emit, "plan", plan=state.plan.to_dict(), revised=True)
@@ -253,7 +268,7 @@ class ResearchGraph:
         if state.artifact_id:
             snapshot["artifact_id"] = state.artifact_id
         if state.errors:
-            snapshot["errors"] = list(state.errors[:5])
+            snapshot["errors"] = list(state.errors[:MAX_ERRORS_SNAPSHOT])
         await emit_event(emit, "step", phase=phase, snapshot=snapshot)
 
     async def plan(
@@ -278,8 +293,8 @@ class ResearchGraph:
                     }
                 ],
                 system=PLAN_SYSTEM,
-                temperature=0.25,
-                max_tokens=1800,
+                temperature=LLM_TEMPERATURE_PLAN,
+                max_tokens=LLM_MAX_TOKENS_PLAN,
                 retries=2,
             )
             plan = ResearchPlan.from_dict(coerce_plan_payload(payload))
@@ -551,22 +566,22 @@ class ResearchGraph:
     ) -> ReviewResult | None:
         client = get_llm(self.config)
         await client.start()
-        digest = build_context_digest(entries, max_abstract=400)
+        digest = build_context_digest(entries, max_abstract=DIGEST_MAX_ABSTRACT_REVIEW)
         payload = await client.chat_json(
             [
                 {
                     "role": "user",
                     "content": reflect_user(
                         state.topic,
-                        state.draft[:6000],
+                        state.draft[:DRAFT_TRUNCATE_REVIEW],
                         [index for index, _ in entries],
                         digest,
                     ),
                 }
             ],
             system=REFLECT_SYSTEM,
-            temperature=0.1,
-            max_tokens=1200,
+            temperature=LLM_TEMPERATURE_REVIEW,
+            max_tokens=LLM_MAX_TOKENS_REVIEW,
             retries=1,
         )
         if not isinstance(payload, dict):
@@ -594,10 +609,10 @@ class ResearchGraph:
         """按审查意见做一轮自动修订（有界，避免无限循环）。"""
         await emit_event(emit, "status", message="正在按审查意见自动修订草稿…")
         entries = sorted(state.citation_map.items())
-        digest = build_context_digest(entries, max_abstract=350)
+        digest = build_context_digest(entries, max_abstract=DIGEST_MAX_ABSTRACT_REVISE)
         issues_text = "\n".join(
             f"- [{i.get('severity')}] {i.get('detail')} → {i.get('suggestion')}"
-            for i in review.issues[:8]
+            for i in review.issues[:MAX_ISSUES_REVISE]
         )
         prompt = (
             f"研究课题：{state.topic}\n\n"
@@ -605,7 +620,7 @@ class ResearchGraph:
             f"输出修订后的完整草稿。\n\n"
             f"审稿意见：\n{issues_text}\n\n"
             f"可引用的文献材料（编号必须与草稿一致）：\n{digest}\n\n"
-            f"草稿：\n{state.draft[:8000]}\n\n"
+            f"草稿：\n{state.draft[:DRAFT_TRUNCATE_REVISE]}\n\n"
             "请直接输出修订后的完整 Markdown 草稿，不要解释修改内容。"
         )
         try:
@@ -614,7 +629,7 @@ class ResearchGraph:
             revised = await client.chat(
                 [{"role": "user", "content": prompt}],
                 system="你是医学综述编辑，只做事实性修正与结构优化，绝不新增材料中不存在的文献或数据。",
-                temperature=0.2,
+                temperature=LLM_TEMPERATURE_REVISE,
                 max_tokens=min(4096, self.config.agent.context_char_budget // 6),
             )
         except LLMError as exc:
@@ -622,7 +637,7 @@ class ResearchGraph:
             return
 
         revised = revised.strip()
-        if not revised or len(revised) < len(state.draft) * 0.5:
+        if not revised or len(revised) < len(state.draft) * REVISE_MIN_LENGTH_RATIO:
             await emit_event(emit, "status", message="自动修订结果不完整，已保留原草稿")
             return
 

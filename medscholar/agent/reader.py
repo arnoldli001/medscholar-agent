@@ -25,6 +25,14 @@ from typing import Any, Awaitable, Callable
 import httpx
 
 from ..config import AppConfig, get_config
+from ..constants import (
+    BODY_TRUNCATE_SUMMARY,
+    LLM_TEMPERATURE_SUMMARY,
+    PDF_CONNECT_TIMEOUT,
+    PDF_DOWNLOAD_TIMEOUT,
+    PDF_MAGIC_BYTES,
+    TITLE_TRUNCATE_FULLTEXT,
+)
 from ..db.connect import Database, get_db
 from ..db.repo import get_fulltext, save_fulltext
 from ..importers.pdf import (
@@ -262,7 +270,7 @@ class ReaderAgent:
         data = b""
         content_type = ""
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(90.0, connect=15.0),
+            timeout=httpx.Timeout(PDF_DOWNLOAD_TIMEOUT, connect=PDF_CONNECT_TIMEOUT),
             follow_redirects=True,
             headers={
                 # 部分站点对 Accept 也做校验；用通配更稳
@@ -275,7 +283,7 @@ class ReaderAgent:
                 return FullTextResult(paper_id, error=error)
 
             # 不是 PDF 而是网页 → 尝试从页面里找出真正的 PDF 地址
-            if not data[:5].startswith(b"%PDF") and ("html" in content_type or data[:200].lstrip()[:1] == b"<"):
+            if not data[:PDF_MAGIC_BYTES].startswith(b"%PDF") and ("html" in content_type or data[:200].lstrip()[:1] == b"<"):
                 try:
                     html = data.decode("utf-8", "replace")
                 except Exception:  # pragma: no cover
@@ -284,12 +292,12 @@ class ReaderAgent:
                 if pdf_url and pdf_url != url:
                     logger.debug("从落地页解析到 PDF 地址：%s", pdf_url)
                     data2, content_type2, error2 = await self._download(client, pdf_url)
-                    if not error2 and data2[:5].startswith(b"%PDF"):
+                    if not error2 and data2[:PDF_MAGIC_BYTES].startswith(b"%PDF"):
                         data, content_type, url = data2, content_type2, pdf_url
 
         if len(data) > _MAX_PDF_BYTES:
             return FullTextResult(paper_id, error="PDF 体积过大，已跳过")
-        if not data[:5].startswith(b"%PDF"):
+        if not data[:PDF_MAGIC_BYTES].startswith(b"%PDF"):
             hint = "链接指向网页而非 PDF（页面里也没有找到 citation_pdf_url 声明）" \
                 if "html" in content_type else "返回内容不是 PDF"
             return FullTextResult(paper_id, error=hint)
@@ -363,7 +371,7 @@ class ReaderAgent:
                     await emit(
                         "status",
                         {
-                            "message": f"已获取全文：{paper.title[:48]}（{len(result.content)} 字）"
+                            "message": f"已获取全文：{paper.title[:TITLE_TRUNCATE_FULLTEXT]}（{len(result.content)} 字）"
                         },
                     )
         return fetched
@@ -385,7 +393,7 @@ class ReaderAgent:
         if paper.paper_id:
             full = get_fulltext(paper.paper_id, db=self.db)
             if full:
-                body = full[:12000]
+                body = full[:BODY_TRUNCATE_SUMMARY]
 
         if not body.strip():
             return "该文献没有可用的摘要或全文，无法生成速读笔记。"
@@ -395,6 +403,6 @@ class ReaderAgent:
         text = await client.chat(
             [{"role": "user", "content": summary_user(body, topic=topic, focus=focus)}],
             system=SUMMARY_SYSTEM,
-            temperature=0.2,
+            temperature=LLM_TEMPERATURE_SUMMARY,
         )
         return text.strip()

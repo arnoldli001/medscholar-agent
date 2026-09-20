@@ -27,6 +27,7 @@ from typing import Any, AsyncIterator, Mapping, Sequence
 
 import httpx
 
+from ..constants import HTTP_CONNECT_TIMEOUT
 from ..platform.config import AppConfig, LLMSettings, get_config
 from ..platform.observability import (
     LEDGER,
@@ -112,7 +113,7 @@ class LLMClient(OllamaBackend, OpenAIBackend):
             self._client = httpx.AsyncClient(
                 base_url=base,
                 headers=headers,
-                timeout=httpx.Timeout(self.settings.timeout, connect=15.0),
+                timeout=httpx.Timeout(self.settings.timeout, connect=HTTP_CONNECT_TIMEOUT),
             )
 
     async def _ensure_started(self) -> None:

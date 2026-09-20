@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from ...constants import MAX_UPLOAD_BYTES
 from ...db import repo
 from ..deps import get_db
 
@@ -117,7 +118,7 @@ async def papers_import(req: ImportRequest) -> dict[str, Any]:
     """
     from ...importers import import_text
 
-    if len(req.content) > 64 * 1024 * 1024:
+    if len(req.content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="文件过大（上限 64 MB）")
 
     report = await import_text(

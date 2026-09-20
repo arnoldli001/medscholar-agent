@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from ..config import AppConfig, get_config
+from ..constants import DB_BUSY_TIMEOUT_MS, DB_CACHE_SIZE_KB, DB_CONNECTION_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +75,8 @@ def _configure(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA temp_store = MEMORY")
-    conn.execute("PRAGMA busy_timeout = 15000")
-    conn.execute("PRAGMA cache_size = -32000")  # ~32MB page cache
+    conn.execute(f"PRAGMA busy_timeout = {DB_BUSY_TIMEOUT_MS}")
+    conn.execute(f"PRAGMA cache_size = {DB_CACHE_SIZE_KB}")  # ~32MB page cache
 
 
 class Database:
@@ -97,7 +98,7 @@ class Database:
         conn = getattr(self._local, "conn", None)
         if conn is None:
             conn = sqlite3.connect(
-                str(self.path), timeout=30.0, isolation_level=None
+                str(self.path), timeout=DB_CONNECTION_TIMEOUT, isolation_level=None
             )
             _configure(conn)
             ok, note = _try_load_sqlite_vec(conn)

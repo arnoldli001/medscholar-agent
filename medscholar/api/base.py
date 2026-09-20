@@ -18,6 +18,7 @@ from typing import Any, Mapping
 import httpx
 
 from ..config import AppConfig, SourceSettings, get_config
+from ..constants import HTTP_CONNECT_TIMEOUT
 from ..models import Paper
 
 logger = logging.getLogger(__name__)
@@ -139,7 +140,7 @@ class BaseClient(ABC):
     async def start(self) -> None:
         if self._client is None:
             self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(self.settings.timeout, connect=15.0),
+                timeout=httpx.Timeout(self.settings.timeout, connect=HTTP_CONNECT_TIMEOUT),
                 headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
                 follow_redirects=True,
                 limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),

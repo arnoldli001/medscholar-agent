@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ...api import SearchFilters
+from ...constants import LLM_TEMPERATURE_PLAN
 from ...db import repo
 from ..deps import get_config, get_db, get_registry, sse_headers
 
@@ -195,7 +196,7 @@ async def ask(req: AskRequest, request: Request) -> StreamingResponse:
             async for chunk in client.stream(
                 [{"role": "user", "content": ask_user(question, digest, paper_count=len(entries))}],
                 system=ASK_SYSTEM,
-                temperature=0.25,
+                temperature=LLM_TEMPERATURE_PLAN,
                 max_tokens=req.max_tokens,
             ):
                 buffer += chunk

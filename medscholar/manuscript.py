@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from .config import AppConfig, get_config
+from .constants import LLM_MAX_TOKENS_MANUSCRIPT, LLM_TEMPERATURE_MANUSCRIPT
 from .db.connect import Database
 from .db.repo import _db
 from .llm.client import LLMError, get_llm
@@ -323,8 +324,8 @@ async def draft_manuscript(
                 async for chunk in client.stream(
                     [{"role": "user", "content": prompt}],
                     system=_SYSTEM,
-                    temperature=0.3,
-                    max_tokens=2000,
+                    temperature=LLM_TEMPERATURE_MANUSCRIPT,
+                    max_tokens=LLM_MAX_TOKENS_MANUSCRIPT,
                 ):
                     body += chunk
                     await on_token(chunk)
@@ -332,8 +333,8 @@ async def draft_manuscript(
                 body = await client.chat(
                     [{"role": "user", "content": prompt}],
                     system=_SYSTEM,
-                    temperature=0.3,
-                    max_tokens=2000,
+                    temperature=LLM_TEMPERATURE_MANUSCRIPT,
+                    max_tokens=LLM_MAX_TOKENS_MANUSCRIPT,
                 )
         except LLMError as exc:
             errors.append(f"「{item['title']}」生成失败：{exc}")

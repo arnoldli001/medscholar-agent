@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Mapping, Sequence
 
 from .config import AppConfig, get_config
+from .constants import DEFAULT_SEARCH_LIMIT
 from .db.connect import Database, get_db
 from .db.repo import hybrid_search, search_fts, search_fulltext
 from .embedding.pipeline import embed_query
@@ -84,7 +85,7 @@ def search_knowledge_base_sync(
 def keyword_search(
     query: str,
     *,
-    limit: int = 50,
+    limit: int = DEFAULT_SEARCH_LIMIT,
     filters: Mapping[str, Any] | None = None,
     db: Database | None = None,
 ) -> list[tuple[int, float]]:
@@ -93,7 +94,7 @@ def keyword_search(
 
 
 def search_full_text(
-    query: str, *, limit: int = 50, db: Database | None = None
+    query: str, *, limit: int = DEFAULT_SEARCH_LIMIT, db: Database | None = None
 ) -> list[tuple[int, float]]:
     """在已入库的开放获取全文中检索。"""
     return search_fulltext(query, limit=limit, db=db)

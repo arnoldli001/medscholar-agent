@@ -19,6 +19,48 @@ import re
 from typing import Sequence
 
 from ..config import AppConfig, get_config
+from ..constants import (
+    ABSTRACT_TRUNCATE_DETECT,
+    ABSTRACT_TRUNCATE_SAMPLE,
+    AGE_OLD,
+    AGE_RECENT,
+    CITED_LARGE,
+    CITED_MEDIUM,
+    CITED_SMALL,
+    DIGEST_MAX_ABSTRACT_CRITIQUE,
+    ERROR_TRUNCATE_LLM,
+    EVIDENCE_HIGH_QUALITY,
+    EVIDENCE_HIGH_RCT_COUNT,
+    EVIDENCE_LOW_QUALITY,
+    EVIDENCE_MEDIUM_QUALITY,
+    LLM_MAX_TOKENS_CRITIQUE_BASE,
+    LLM_MAX_TOKENS_CRITIQUE_CAP,
+    LLM_MAX_TOKENS_CRITIQUE_PER_PAPER,
+    LLM_TEMPERATURE_CRITIQUE,
+    QUALITY_ADJUST_LARGE_CITED,
+    QUALITY_ADJUST_LARGE_SAMPLE,
+    QUALITY_ADJUST_MEDIUM_CITED,
+    QUALITY_ADJUST_MEDIUM_SAMPLE,
+    QUALITY_ADJUST_RECENT,
+    QUALITY_ADJUST_SMALL_CITED,
+    QUALITY_ADJUST_SMALL_SAMPLE,
+    QUALITY_PENALTY_NO_ABSTRACT,
+    QUALITY_PENALTY_NO_CITATION,
+    QUALITY_PENALTY_OLD,
+    QUALITY_PENALTY_TINY_SAMPLE,
+    RELEVANCE_BASE,
+    RELEVANCE_BONUS,
+    RELEVANCE_RANGE,
+    SAMPLE_EXTRACT_MIN,
+    SAMPLE_MAX,
+    SAMPLE_SIZE_LARGE,
+    SAMPLE_SIZE_MEDIUM,
+    SAMPLE_SIZE_MIN,
+    SAMPLE_SIZE_SMALL,
+    SCORE_MAX,
+    TITLE_TRUNCATE_SUGGESTION,
+    USE_IN_REVIEW_THRESHOLD,
+)
 from ..llm.client import LLMError, get_llm
 from ..llm.prompts import CRITIQUE_SYSTEM, critique_user
 from ..models import Paper
@@ -67,7 +109,7 @@ def detect_evidence_level(paper: Paper) -> str:
         [
             (paper.publication_type or "").lower(),
             (paper.title or "").lower(),
-            (paper.abstract or "")[:1500].lower(),
+            (paper.abstract or "")[:ABSTRACT_TRUNCATE_DETECT].lower(),
         ]
     )
     # 动物实验优先级高于设计类型：动物 RCT 依然是动物实验
@@ -83,7 +125,7 @@ def detect_evidence_level(paper: Paper) -> str:
 
 def extract_sample_size(paper: Paper) -> int | None:
     """从摘要中提取样本量（取各模式中的最大值，避免误取年份等小数字）。"""
-    text = " ".join([paper.title or "", paper.abstract or ""])[:4000]
+    text = " ".join([paper.title or "", paper.abstract or ""])[:ABSTRACT_TRUNCATE_SAMPLE]
     candidates: list[int] = []
     for pattern in _SAMPLE_PATTERNS:
         for match in pattern.finditer(text):
@@ -91,7 +133,7 @@ def extract_sample_size(paper: Paper) -> int | None:
                 value = int(match.group(1))
             except (TypeError, ValueError):
                 continue
-            if 5 <= value <= 500_000:
+            if SAMPLE_EXTRACT_MIN <= value <= SAMPLE_MAX:
                 candidates.append(value)
     return max(candidates) if candidates else None
 
@@ -115,11 +157,11 @@ def _relevance_score(paper: Paper, topic_terms: set[str]) -> float:
     abstract_hits = sum(1 for t in topic_terms if t in abstract or t in keywords)
 
     coverage = min(1.0, (title_hits * 2.0 + abstract_hits * 1.0) / (len(topic_terms) * 2.0))
-    score = 3.0 + coverage * 7.0
+    score = RELEVANCE_BASE + coverage * RELEVANCE_RANGE
     # 主题词命中是强信号
     if title_hits and coverage >= 0.5:
-        score = min(10.0, score + 0.8)
-    return round(max(0.0, min(10.0, score)), 1)
+        score = min(SCORE_MAX, score + RELEVANCE_BONUS)
+    return round(max(0.0, min(SCORE_MAX, score)), 1)
 
 
 def heuristic_assessment(
@@ -135,39 +177,39 @@ def heuristic_assessment(
     # --- 样本量：大样本加分，过小减分
     sample = extract_sample_size(paper)
     if sample is not None:
-        if sample >= 1000:
-            quality += 1.2
-        elif sample >= 300:
-            quality += 0.8
-        elif sample >= 100:
-            quality += 0.4
-        elif sample < 30:
-            quality -= 0.8
+        if sample >= SAMPLE_SIZE_LARGE:
+            quality += QUALITY_ADJUST_LARGE_SAMPLE
+        elif sample >= SAMPLE_SIZE_MEDIUM:
+            quality += QUALITY_ADJUST_MEDIUM_SAMPLE
+        elif sample >= SAMPLE_SIZE_SMALL:
+            quality += QUALITY_ADJUST_SMALL_SAMPLE
+        elif sample < SAMPLE_SIZE_MIN:
+            quality += QUALITY_PENALTY_TINY_SAMPLE
 
     # --- 被引：领域影响力的粗略代理
     cited = paper.cited_by_count or 0
-    if cited >= 500:
-        quality += 1.2
-    elif cited >= 100:
-        quality += 0.8
-    elif cited >= 30:
-        quality += 0.4
+    if cited >= CITED_LARGE:
+        quality += QUALITY_ADJUST_LARGE_CITED
+    elif cited >= CITED_MEDIUM:
+        quality += QUALITY_ADJUST_MEDIUM_CITED
+    elif cited >= CITED_SMALL:
+        quality += QUALITY_ADJUST_SMALL_CITED
     elif cited == 0:
-        quality -= 0.3
+        quality += QUALITY_PENALTY_NO_CITATION
 
     # --- 时效性
     if paper.pub_year:
         age = current_year - paper.pub_year
-        if age <= 3:
-            quality += 0.5
-        elif age >= 12:
-            quality -= 0.6
+        if age <= AGE_RECENT:
+            quality += QUALITY_ADJUST_RECENT
+        elif age >= AGE_OLD:
+            quality += QUALITY_PENALTY_OLD
 
     # --- 完整度：没有摘要的文献难以评估
     if not (paper.abstract or "").strip():
-        quality -= 1.2
+        quality += QUALITY_PENALTY_NO_ABSTRACT
 
-    quality = round(max(0.0, min(10.0, quality)), 1)
+    quality = round(max(0.0, min(SCORE_MAX, quality)), 1)
 
     topic_terms = {t for t in _WORD_RE.findall((topic or "").lower()) if t not in _STOP}
     relevance = _relevance_score(paper, topic_terms)
@@ -177,7 +219,7 @@ def heuristic_assessment(
         relevance = round(relevance * 0.7 + 6.0 * 0.3, 1)
 
     limitation = ""
-    if sample is not None and sample < 30:
+    if sample is not None and sample < SAMPLE_SIZE_MIN:
         limitation = f"样本量偏小（n={sample}）"
     elif level == "动物实验":
         limitation = "动物实验，外推至临床需谨慎"
@@ -198,7 +240,7 @@ def heuristic_assessment(
         evidence_level=level,
         key_finding=key_finding,
         limitation=limitation,
-        use_in_review=relevance >= 4.0,
+        use_in_review=relevance >= USE_IN_REVIEW_THRESHOLD,
         source="heuristic",
     )
 
@@ -256,7 +298,7 @@ class CriticAgent:
                 await emit_event(
                     emit,
                     "status",
-                    message=f"LLM 评估不可用（{str(exc)[:60]}），已改用规则评估",
+                    message=f"LLM 评估不可用（{str(exc)[:ERROR_TRUNCATE_LLM]}），已改用规则评估",
                 )
                 llm_assessments = {}
             except Exception as exc:  # pragma: no cover
@@ -296,11 +338,11 @@ class CriticAgent:
         rct_like = sum(
             1 for a in usable if a.evidence_level in {"RCT", "Meta分析/系统评价", "指南/共识"}
         )
-        if avg_quality >= 7.5 and rct_like >= 3:
+        if avg_quality >= EVIDENCE_HIGH_QUALITY and rct_like >= EVIDENCE_HIGH_RCT_COUNT:
             result.evidence_quality = "高"
-        elif avg_quality >= 6.0:
+        elif avg_quality >= EVIDENCE_MEDIUM_QUALITY:
             result.evidence_quality = "中"
-        elif avg_quality >= 4.0:
+        elif avg_quality >= EVIDENCE_LOW_QUALITY:
             result.evidence_quality = "低"
         else:
             result.evidence_quality = "极低"
@@ -335,7 +377,7 @@ class CriticAgent:
         else:
             subset = list(entries)
 
-        digest = build_context_digest(subset, max_abstract=600)
+        digest = build_context_digest(subset, max_abstract=DIGEST_MAX_ABSTRACT_CRITIQUE)
         logger.info("LLM 逐篇点评 %d/%d 篇文献", len(subset), len(entries))
 
         client = get_llm(self.config)
@@ -343,8 +385,11 @@ class CriticAgent:
         payload = await client.chat_json(
             [{"role": "user", "content": critique_user(topic, digest, len(subset))}],
             system=CRITIQUE_SYSTEM,
-            temperature=0.1,
-            max_tokens=min(3000, 320 * len(subset) + 400),
+            temperature=LLM_TEMPERATURE_CRITIQUE,
+            max_tokens=min(
+                LLM_MAX_TOKENS_CRITIQUE_CAP,
+                LLM_MAX_TOKENS_CRITIQUE_PER_PAPER * len(subset) + LLM_MAX_TOKENS_CRITIQUE_BASE,
+            ),
             retries=2,
         )
         raw_items = payload.get("assessments") if isinstance(payload, dict) else None
@@ -381,7 +426,7 @@ class CriticAgent:
         for assessment in top:
             paper = index_to_paper.get(assessment.index)
             if paper:
-                names.append(f"[{assessment.index}] {paper.title[:36]}")
+                names.append(f"[{assessment.index}] {paper.title[:TITLE_TRUNCATE_SUGGESTION]}")
         if names:
             suggestions.append("优先引用质量最高的文献：" + "；".join(names))
         rct_count = sum(1 for a in usable if a.evidence_level in {"RCT", "Meta分析/系统评价"})

@@ -18,6 +18,25 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Sequence
 
 from ..config import AppConfig, get_config
+from ..constants import (
+    EVENT_POLL_SECONDS,
+    HEARTBEAT_SECONDS,
+    MAX_ERRORS_PERSIST,
+    MAX_ERRORS_SNAPSHOT,
+    REVIEW_CHARS_DEFAULT_MAX,
+    REVIEW_CHARS_DEFAULT_MIN,
+    REVIEW_CHARS_GAP,
+    REVIEW_CHARS_HIGH_FLOOR,
+    REVIEW_CHARS_MAX,
+    REVIEW_CHARS_MIN,
+    REVIEW_MAX_TO_MIN_RATIO,
+    REVIEW_MIN_TO_MAX_RATIO,
+    RUNS_LIST_LIMIT,
+    RUN_RETENTION_SECONDS,
+    STREAM_TIMEOUT_SECONDS,
+    TITLE_TRUNCATE_SESSION,
+    TITLE_TRUNCATE_TOPIC_LOG,
+)
 from ..db.connect import Database, get_db
 from ..db.repo import add_message
 from ..db.repo import create_session as db_create_session
@@ -45,13 +64,6 @@ __all__ = ["RunHandle", "AgentRuntime", "get_runtime"]
 #: 终止事件类型
 _TERMINAL = {"done"}
 
-#: 已完成运行在内存中的保留时长（秒）
-_RETENTION_SECONDS = 3600
-
-#: 事件轮询间隔（秒）与 SSE 心跳间隔（秒）
-_POLL_SECONDS = 0.2
-_HEARTBEAT_SECONDS = 15.0
-
 #: 典型的界面占位提示前缀。真实的研究课题不会以这些词开头，
 #: 而一旦把占位提示当成课题，就会跑一次十几分钟、结果毫无意义的研究流程。
 _PLACEHOLDER_PREFIXES = (
@@ -78,16 +90,16 @@ def normalize_review_chars(
     if high <= 0:
         high = int(getattr(agent, "review_max_chars", 0) or 0)
     if low <= 0 and high <= 0:
-        low, high = 4000, 8000
+        low, high = REVIEW_CHARS_DEFAULT_MIN, REVIEW_CHARS_DEFAULT_MAX
     if low <= 0:
-        low = int(high * 0.6)
+        low = int(high * REVIEW_MIN_TO_MAX_RATIO)
     if high <= 0:
-        high = int(low * 1.6)
+        high = int(low * REVIEW_MAX_TO_MIN_RATIO)
     if low > high:
         low, high = high, low
     # 先把 high 夹进上限，再让 low 留在 high 之下，避免两者互相顶出边界
-    high = max(1000, min(high, 40000))
-    low = max(800, min(low, high - 200))
+    high = max(REVIEW_CHARS_HIGH_FLOOR, min(high, REVIEW_CHARS_MAX))
+    low = max(REVIEW_CHARS_MIN, min(low, high - REVIEW_CHARS_GAP))
     return low, high
 
 
@@ -186,7 +198,7 @@ class AgentRuntime:
         )
 
         if session_id is None and new_session:
-            title = topic[:40] + ("…" if len(topic) > 40 else "")
+            title = topic[:TITLE_TRUNCATE_SESSION] + ("…" if len(topic) > TITLE_TRUNCATE_SESSION else "")
             session_id = db_create_session(title=title, topic=topic, db=self.db)
 
         state = AgentState(
@@ -236,7 +248,7 @@ class AgentRuntime:
             )
         except Exception as exc:  # pragma: no cover - 记录失败不应影响运行
             logger.debug("运行落库失败：%s", exc)
-        logger.info("启动 Agent 运行 %s：%s", state.run_id, topic[:60])
+        logger.info("启动 Agent 运行 %s：%s", state.run_id, topic[:TITLE_TRUNCATE_TOPIC_LOG])
         return handle
 
     async def resume(self, run_id: str) -> RunHandle:
@@ -308,7 +320,7 @@ class AgentRuntime:
         if artifact_id:
             state.artifact_id = int(artifact_id)
 
-        for message in (merged.get("errors") or [])[:5]:
+        for message in (merged.get("errors") or [])[:MAX_ERRORS_SNAPSHOT]:
             state.add_error(str(message))
 
         if state.papers:
@@ -455,7 +467,7 @@ class AgentRuntime:
                 papers=len(state.papers),
                 citations=len(state.citation_map),
                 artifact_id=artifact_id,
-                error="; ".join(state.errors[:3]),
+                error="; ".join(state.errors[:MAX_ERRORS_PERSIST]),
                 db=self.db,
             )
         except Exception as exc:  # pragma: no cover
@@ -493,12 +505,12 @@ class AgentRuntime:
     def get(self, run_id: str) -> RunHandle | None:
         return self._runs.get(run_id)
 
-    def list_runs(self, *, limit: int = 30) -> list[dict[str, Any]]:
+    def list_runs(self, *, limit: int = RUNS_LIST_LIMIT) -> list[dict[str, Any]]:
         handles = sorted(self._runs.values(), key=lambda h: -h.created_at)[:limit]
         return [h.to_dict() for h in handles]
 
     async def stream(
-        self, run_id: str, *, timeout: float = 3600.0
+        self, run_id: str, *, timeout: float = STREAM_TIMEOUT_SECONDS
     ) -> AsyncIterator[AgentEvent]:
         """产出事件流：先补播历史，再实时跟随，直到 ``done``。
 
@@ -546,8 +558,8 @@ class AgentRuntime:
                 return
 
             # 3) 等待新事件；长时间无输出时发心跳，避免代理掐断连接
-            await asyncio.sleep(_POLL_SECONDS)
-            if time.monotonic() - last_output >= _HEARTBEAT_SECONDS:
+            await asyncio.sleep(EVENT_POLL_SECONDS)
+            if time.monotonic() - last_output >= HEARTBEAT_SECONDS:
                 last_output = time.monotonic()
                 yield AgentEvent(type="ping", data={})
 
@@ -557,7 +569,7 @@ class AgentRuntime:
         stale = [
             run_id
             for run_id, handle in self._runs.items()
-            if handle.closed and now - handle.created_at > _RETENTION_SECONDS
+            if handle.closed and now - handle.created_at > RUN_RETENTION_SECONDS
         ]
         for run_id in stale:
             self._runs.pop(run_id, None)
