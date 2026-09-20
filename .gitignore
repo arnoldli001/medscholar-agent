@@ -9,6 +9,9 @@ dist/
 config.yaml
 .env
 
+# 本地材料（面试准备文档，含个人信息，不入版本控制）
+docs/
+
 # Python
 __pycache__/
 *.py[cod]
