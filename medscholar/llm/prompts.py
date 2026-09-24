@@ -1,29 +1,8 @@
-"""Agent 提示词集中管理（兼容外壳）。
+"""Agent 提示词的兼容外壳：提示词正文已带版本号迁至 platform.prompt_library，
 
-提示词正文已带着版本号迁至 :mod:`medscholar.platform.prompt_library`，
-本模块保留为兼容外壳：原有的常量名、函数名与 ``__all__`` 一个都不少，
-值与迁移前逐字相同——这一点由 ``tests/test_prompts.py`` 的迁移完整性用例锁定。
-
-保留外壳而不是删掉的原因：``medscholar.llm.prompts`` 是公开契约，
-``agent/graph.py``、``agent/critic.py``、``agent/reader.py``、``agent/writer.py``、
-``retrieval.py``、``server/routes/search.py`` 以及测试都在 import 它。
-一次性改掉所有调用点，会把"低风险的文本搬迁"变成"高风险的大改造"，
-只做重导出的外壳成本几乎为零。
-
-常量用重导出（``X as X``）而不是再写一份：两份文本就是两份真相，
-早晚会有一份变旧，而且变旧的那份不会有任何提示。
-重导出拿到的是同一个对象，不存在"哪份才是真的"的问题；
-``X as X`` 这个写法本身也在告诉静态检查与读者："这是有意重导出，不是没用到的 import"。
-
-函数留在这里的原因：它们包含的是流程——取哪些片段、按什么顺序拼、什么时候整段留空；
-所有成文的提示词句子都在注册表里。把流程也塞进注册表等于在注册表里写代码，
-那正是本项目拒绝引入模板引擎的原因（见 :mod:`medscholar.platform.prompts`）。
-留在原处的还有三个 JSON 示例结构（``_PLAN_SCHEMA`` 等）：它们是数据，
-由 ``json.dumps(..., ensure_ascii=False, indent=2)`` 渲染，放在这里才能保证
-连缩进与转义都与迁移前一致。
-
-新代码请直接使用 :mod:`medscholar.platform.prompts`（``prompt_text("writer.section", ...)``），
-那样才能拿到版本坐标，也便于做 A/B。
+此处用 ``X as X`` 显式重导出常量（同一对象，不存在两份真相），并保留组装函数
+（取哪些片段、拼接顺序是流程不是文案）与三个 JSON 示例结构（保证渲染缩进/转义一致）。
+迁移完整性由 tests/test_prompts.py 锁定；新代码请直接用 platform.prompts.prompt_text。
 """
 
 from __future__ import annotations
@@ -66,10 +45,7 @@ __all__ = [
     "digest_papers",
 ]
 
-# 以下两个名字不在 ``__all__`` 里，但确实被外部引用：
-# ``agent/writer.py`` 的 write_abstract 直接 import 了 ``_ROLE`` 来复用统一人设。
-# 外壳漏掉私有名会让 import 直接失败（本仓库的 test_compat_shims.py 记录过同类事故），
-# 所以这两个名字同样显式重导出，不能靠 import * 顺带带出来。
+# _ROLE/_HARD_RULES 不在 __all__ 但被外部（agent/writer.py）直接 import，必须显式重导出。
 
 _PLAN_SCHEMA = {
     "topic_zh": "课题的中文规范表述",
@@ -127,12 +103,7 @@ def section_user(
     min_chars: int = 0,
     style: str = "综述正文",
 ) -> str:
-    """单章节撰写提示词。
-
-    ``min_chars`` / ``max_chars`` 是本节的目标字数区间。以前只给一个
-    "约 900 字"，模型就真的只写 900 字；给出区间并明确"写满下限"才能得到
-    用户期望的篇幅。
-    """
+    """单章节撰写提示词。字数给区间而非单一目标值，并明确写满下限，否则模型会贴着下限写。"""
     if points:
         bullet = "\n".join(f"- {p}" for p in points)
     else:
@@ -218,11 +189,7 @@ def reflect_user(topic: str, draft: str, valid_ids: Sequence[int], digest: str) 
 
 
 def summary_user(paper_text: str, *, topic: str = "", focus: str = "") -> str:
-    """单篇速读的用户提示词。
-
-    块之间用空行分隔，与迁移前的 ``"\\n\\n".join(parts)`` 完全一致；
-    每块文本本身来自注册表，这里只决定"放哪几块、什么顺序"。
-    """
+    """单篇速读用户提示词；块间空行分隔（与迁移前 "\\n\\n".join 一致），本函数只决定块与顺序。"""
     parts = []
     if topic:
         parts.append(prompt_text("summary.user.topic", topic=topic))
@@ -261,17 +228,9 @@ def ask_user(question: str, digest: str, *, paper_count: int = 0) -> str:
 
 
 def _numbered_index(paper: Mapping[str, Any], fallback: int) -> int:
-    """取数据里携带的显式编号（``__index__``），不可用时回退到顺序编号。
-
-    材料编号要允许"外部指定"：调用方给出的编号才是正文里 ``[n]`` 的含义。
-    ``retrieval.build_context_digest`` 会把筛过的子集交给这里（Critic 按启发式
-    打分挑出最相关的若干篇，真编号可能是 1/4/7/12），并在拿回模型点评后按真编号
-    回查文献。如果这里按 1/2/3/4 重新编号，模型说的"第 2 篇"就会被挂到真编号 2 的
-    那篇上——而那篇可能根本不在材料里：轻则点评丢失，重则把差评挂到好文献头上。
-
-    回退而不是抛异常：本函数在写作主路径上，一个编号字段脏了不该让整篇
-    综述生成失败。``bool`` 也回退——它是 ``int`` 的子类，但 ``True`` 显然不是编号。
-    """
+    """优先取数据携带的显式编号 __index__（正文 [n] 的含义由调用方指定，
+    筛选子集可能有编号空洞如 1/4/7/12，重编号会把模型点评挂错文献）；
+    缺失/非整数（含 bool）回退顺序编号而非抛异常，写作主路径不能被脏字段阻断。"""
     raw = paper.get("__index__")
     if isinstance(raw, bool) or not isinstance(raw, int):
         return fallback
@@ -285,20 +244,9 @@ def digest_papers(
     max_abstract: int = 900,
     max_papers: int = 25,
 ) -> str:
-    """把文献列表压成适合放进提示词的材料摘要。
-
-    编号即综述正文里使用的引用序号，取值规则：
-
-    1. 数据里带 ``__index__``（且是整数）时优先用它——调用方传进来的显式编号
-       才是正文引用的含义。筛过的子集会有编号空洞（1/4/7/12），
-       若在这里按顺序重新编号，材料里的 ``[n]`` 就与正文引用对不上了；
-    2. 否则按 ``start_index + 顺序`` 递增编号（普通列表的默认行为，向后兼容）；
-    3. ``__index__`` 缺失或不是整数时安全回退到顺序编号而不是抛异常——
-       这个函数在写作主路径上，脏字段不该让整篇综述写不出来。
-
-    这个函数不搬进注册表：它产出的是每次运行都不同的材料数据块，
-    不是提示词文本。把数据渲染混进提示词库，会让"这段话有没有被改过"重新变得难判断。
-    """
+    """把文献列表压成提示词用的材料摘要。编号即正文引用序号：优先用显式 __index__
+    （筛选子集有编号空洞，重编号会让材料 [n] 与正文引用错位），否则按 start_index
+    顺序递增，脏字段安全回退。本函数产出运行时数据块，故不放进提示词注册表。"""
     blocks: list[str] = []
     for offset, paper in enumerate(papers[:max_papers]):
         index = _numbered_index(paper, start_index + offset)

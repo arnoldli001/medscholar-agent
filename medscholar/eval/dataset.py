@@ -1,30 +1,9 @@
-"""黄金数据集：读写、校验与偏差说明。
+"""黄金数据集：JSONL 读写、校验与偏差说明。
 
-数据集是 JSONL（每行一条），刻意做成纯文本以便在 PR 里逐行 review——
-评测集的改动应该像代码一样被审查，而不是悄悄改掉数字。
-
-一行查询的格式::
-
-    {
-      "query": "加速 rTMS 治疗卒中后抑郁的疗效",
-      "relevant": {"12": 1, "45": 1},        // id -> 相关性（二元用 1，分级用 2/3）
-      "notes": "标注口径：只要报告了 HAMD 变化即算相关",
-      "source": "llm-question",              // known-item / llm-question / manual
-      "tags": ["zh", "rct"]
-    }
-
-关于标注偏差（写在数据文件里，不只是文档里）：不同来源的查询难度差别很大，
-所以每条查询都带 ``source`` 字段，报告里可以按来源分组看指标：
-
-* ``known-item``：查询就是文献标题。词面重叠极高，会显著高估 BM25，
-  适合验证"管道通不通"，不适合用来吹检索质量。
-* ``llm-question``：由模型根据摘要写一个可回答的研究问题，词面重叠低得多，
-  更接近真实使用，但受模型措辞影响。
-* ``manual``：人工撰写，最可信，成本最高。
-
-语料（被检索的库）与数据集分开：语料是"临时装进 SQLite 的文献元数据"，
-数据集是"查询 + 应命中的文献 id"。id 用语料内的序号而不是真实 paper_id，
-这样换机器、换库都能复现。
+用纯文本 JSONL 以便 PR 逐行 review。每条查询带 source 字段按来源分组看指标，
+偏差各不同：known-item（查询即标题，词面重叠高，高估 BM25，只验管道）、
+llm-question（模型据摘要写问题，近真实但受措辞影响）、manual（最可信、最贵）。
+语料与查询集分开，relevant 的 id 用语料内 1-based 序号而非真实 paper_id，保证可复现。
 """
 
 from __future__ import annotations
@@ -65,9 +44,7 @@ class EvalCase:
     notes: str = ""
     source: str = ""
     tags: list[str] = field(default_factory=list)
-    #: 显式声明"这条查询本来就没有相关文献"（阴性对照）。
-    #: 有了它，校验器才能区分"故意留空"与"忘了标注"——
-    #: 后者会让指标虚高，必须拦下；前者是有价值的对照实验。
+    #: 阴性对照声明：区分"故意留空"（合法对照）与"忘了标注"（会虚高指标，校验拦下）。
     expect_no_relevant: bool = False
 
     def to_dict(self) -> dict[str, Any]:

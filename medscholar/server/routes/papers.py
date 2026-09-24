@@ -1,8 +1,4 @@
-"""文献库路由（``tags=["文献库"]``）：列表、详情、删除、本地检索、导入、全文与速读。
-
-这里的接口全部围绕本地知识库中的文献对象，不联网、不启动 Agent 工作流
-（联网检索在 ``search.py``，综述生成在 ``agent.py``）。
-"""
+"""文献库路由：本地知识库文献的列表/详情/删除/本地检索/导入/全文/速读，不联网、不启动工作流。"""
 
 from __future__ import annotations
 
@@ -31,11 +27,7 @@ class DeletePapersRequest(BaseModel):
 
 
 class ImportRequest(BaseModel):
-    """导入题录文件。
-
-    ``content`` 直接放文件文本（前端用 FileReader 读出来），
-    这样不需要 multipart 上传，也方便命令行/脚本调用。
-    """
+    """导入题录文件；content 直接放文件文本，免去 multipart 上传，也便于脚本调用。"""
 
     content: str = Field(min_length=1)
     filename: str = ""
@@ -111,11 +103,7 @@ async def papers_search(req: LocalSearchRequest) -> dict[str, Any]:
 
 @router.post("/api/import", tags=["文献库"])
 async def papers_import(req: ImportRequest) -> dict[str, Any]:
-    """导入题录文件（RIS / BibTeX / EndNote 标记 / WoS 纯文本 / CSV）。
-
-    用于把 Web of Science、Scopus、Embase、CNKI、万方 等导出的题录
-    搬进本地库。只解析用户提供的文件，不联网、不使用任何账号。
-    """
+    """导入题录文件（RIS/BibTeX/EndNote/WoS/CSV）；只解析用户文件，不联网、不用账号。"""
     from ...importers import import_text
 
     if len(req.content) > MAX_UPLOAD_BYTES:

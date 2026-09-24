@@ -1,8 +1,4 @@
-"""MedScholar Agent 数据模型。
-
-所有学术 API 客户端统一返回 :class:`Paper`，数据库读写与 Agent 层也只依赖该结构，
-因此新增数据源时不需要改动下游任何代码。
-"""
+"""数据模型：所有 API 客户端、数据库与 Agent 层统一依赖 Paper，新增数据源无需改下游。"""
 
 from __future__ import annotations
 
@@ -101,10 +97,7 @@ def coerce_str_list(value: Any) -> list[str]:
 
 @dataclass(slots=True)
 class Paper:
-    """一篇文献的规范化元数据。
-
-    ``papers`` 表字段与本类一一对应；``raw`` 仅用于调试，不落库。
-    """
+    """一篇文献的规范化元数据，字段与 papers 表一一对应。"""
 
     title: str
     source: str

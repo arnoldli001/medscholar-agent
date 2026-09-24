@@ -1,12 +1,6 @@
-"""四节点工作流编排（需求 3.2）。
+"""四节点工作流编排：Plan → 审批 → Execute → Reflect → Synthesize → Review → 成稿。
 
-::
-
-    [Plan] → [用户审批] → [Execute] → [Reflect] → [Synthesize] → [Review] → 成稿
-
-本项目不需要 LangGraph 的持久化图状态机（单机、单用户、运行期状态全在内存），
-故用等价的 async 编排 + 事件流实现同一语义，避免为一个线性流程引入重依赖。
-每个节点是独立方法，可单独测试与替换。
+线性流程用 async 编排 + 事件流实现；每个节点是独立方法，可单独测试与替换。
 """
 
 from __future__ import annotations
@@ -91,10 +85,9 @@ class ResearchGraph:
         emit: Emitter | None = None,
         approval: ApprovalCallback | None = None,
     ) -> AgentState:
-        """执行完整工作流。任何异常都会被记录进 ``state.errors`` 并优雅收尾。
+        """执行完整工作流；异常记入 ``state.errors`` 并优雅收尾。
 
-        若 ``state.resumed_from`` 指明某个阶段已经完成（断点续跑），
-        该阶段及其之前的阶段会直接复用已有成果，不再重跑。
+        ``state.resumed_from`` 及之前已完成的阶段（断点续跑）直接复用成果，不再重跑。
         """
         done_at = _phase_index(state.resumed_from)
         resumed = done_at >= 0
@@ -105,7 +98,6 @@ class ResearchGraph:
                 message=f"从「{state.resumed_from}」阶段继续，已完成的阶段不再重跑",
             )
         try:
-            # ---------------------------------------------------- 1. Plan
             state.phase = Phase.PLAN
             await emit_event(emit, "phase", phase=Phase.PLAN.value, label=Phase.PLAN.label)
             if done_at >= _phase_index("plan") and state.plan is not None:
@@ -117,8 +109,7 @@ class ResearchGraph:
             await emit_event(emit, "plan", plan=state.plan.to_dict())
             await self._checkpoint(state, "plan", emit=emit)
 
-            # ------------------------------------------- 2. 用户审批（人机协同）
-            # 只有"停在规划之后"的运行才需要重新审批；已经进过执行阶段的说明早就批过了
+            # 续跑时若已进入执行阶段，说明此前审批过，不再重复审批
             need_approval = approval is not None and self.config.agent.require_approval
             if need_approval and done_at > _phase_index("plan"):
                 await emit_event(
@@ -155,7 +146,6 @@ class ResearchGraph:
                     state.plan = await self.plan(state, emit=emit, feedback=feedback.strip())
                     await emit_event(emit, "plan", plan=state.plan.to_dict(), revised=True)
 
-            # ------------------------------------------------- 3. Execute
             state.phase = Phase.EXECUTE
             await emit_event(
                 emit, "phase", phase=Phase.EXECUTE.value, label=Phase.EXECUTE.label
@@ -185,7 +175,6 @@ class ResearchGraph:
                 )
                 return state
 
-            # ------------------------------------------------- 4. Reflect
             state.phase = Phase.REFLECT
             await emit_event(
                 emit, "phase", phase=Phase.REFLECT.value, label=Phase.REFLECT.label
@@ -196,7 +185,6 @@ class ResearchGraph:
                 await self.reflect(state, emit=emit)
             await self._checkpoint(state, "reflect", emit=emit)
 
-            # ---------------------------------------------- 5. Synthesize
             state.phase = Phase.SYNTHESIZE
             await emit_event(
                 emit, "phase", phase=Phase.SYNTHESIZE.value, label=Phase.SYNTHESIZE.label
@@ -209,7 +197,6 @@ class ResearchGraph:
                 await self.synthesize(state, emit=emit)
             await self._checkpoint(state, "synthesize", emit=emit)
 
-            # -------------------------------------------------- 6. Review
             state.phase = Phase.REVIEW
             await emit_event(emit, "phase", phase=Phase.REVIEW.value, label=Phase.REVIEW.label)
             if done_at >= _phase_index("review") and state.review is not None:
@@ -218,7 +205,6 @@ class ResearchGraph:
                 await self.review(state, emit=emit)
             await self._checkpoint(state, "review", emit=emit)
 
-            # ------------------------------------------------ 7. 成稿落库
             await self.finalize(state, emit=emit)
 
         except asyncio.CancelledError:
@@ -246,10 +232,9 @@ class ResearchGraph:
 
     # ============================================================ 节点实现
     async def _checkpoint(self, state: AgentState, phase: str, *, emit: Emitter | None) -> None:
-        """阶段结束后打一个快照，供断点续跑与页面刷新后恢复。
+        """阶段结束后打快照，供断点续跑与页面刷新恢复。
 
-        走 ``step`` 事件交给 Runtime 落库；事件本身不推给浏览器
-        （快照可能包含上万字的草稿，没必要占用事件流）。
+        经 ``step`` 事件交给 Runtime 落库、不推浏览器（快照可能含上万字草稿）。
         """
         snapshot: dict[str, Any] = {}
         if state.plan is not None:
@@ -325,7 +310,7 @@ class ResearchGraph:
             await emit_event(emit, "error", message=message)
             degraded_reason = f"大模型未能生成检索策略（{exc}），已改用课题关键词 + 模板大纲"
         except Exception as exc:  # pragma: no cover
-            # 必须带 traceback：曾经只打了 %s，导致定位不到真实抛点
+            # exc_info=True 保留 traceback，否则定位不到真实抛点
             logger.warning("规划异常：%s", exc, exc_info=True)
             state.add_error(f"规划异常：{exc}")
             degraded_reason = f"规划出错（{type(exc).__name__}: {exc}），已改用课题关键词 + 模板大纲"
@@ -364,7 +349,7 @@ class ResearchGraph:
             items=[p.to_dict() for p in state.papers[:40]],
         )
 
-        # 为最相关的开放获取文献预取全文（有全文的文献写作质量明显更高）
+        # 为最相关的 OA 文献预取全文，供写作时深度引用
         if state.papers and not state.offline and self.config.agent.warm_fulltext:
             entries = state.select_papers(max_papers=self.config.agent.fulltext_top_n, use_critique=False)
             subset = [paper for _index, paper in entries]
@@ -415,7 +400,6 @@ class ResearchGraph:
             state.draft = f"# {state.topic}\n\n> 没有可用文献，无法生成综述。\n"
             return state.draft
 
-        # 大纲：优先用 LLM 结合真实材料细化
         fallback = state.plan.outline if state.plan else []
         state.outline = await self.writer.refine_outline(
             state.topic, entries, fallback=fallback, emit=emit
@@ -445,13 +429,12 @@ class ResearchGraph:
         entries = sorted(state.citation_map.items())
         result = ReviewResult()
 
-        # ---- 规则体检（不依赖 LLM，永远可执行）
+        # 规则体检不依赖 LLM，离线也永远可执行
         check = self.formatter.selfcheck(state.draft, entries)
         result.invalid_citations = list(check["citations"]["missing_from_list"])
         result.issues = list(check["issues"])
         result.verdict = check["verdict"]
 
-        # ---- LLM 自我批判
         if not state.offline and not self.config.offline and state.draft.strip():
             try:
                 llm_review = await self._llm_review(state, entries)
@@ -481,7 +464,6 @@ class ResearchGraph:
         )
         await emit_event(emit, "review", **result.to_dict())
 
-        # ---- 自动修订（默认一轮）
         if (
             self.config.agent.auto_revise
             and not result.passed

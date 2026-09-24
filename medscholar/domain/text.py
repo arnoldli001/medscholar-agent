@@ -1,11 +1,8 @@
-"""文本归一化与中日韩（CJK）分词辅助。
+"""文本归一化与 CJK 分词辅助。
 
-SQLite FTS5 的 ``unicode61`` 分词器把连续汉字当成单个 token，
-中文摘要（尤其 CNKI 来源）会被关键词检索漏掉。
-
-做法是在索引写入和查询构造两侧都插入汉字之间的空格，
-使 unicode61 退化为单字索引，再用 FTS5 的短语查询（``"加 速 治 疗"``）
-还原子串匹配语义。中英文共用同一张 FTS5 表，无需分词依赖。
+坑：FTS5 unicode61 把连续汉字当成单个 token，中文摘要会被关键词检索漏掉。
+解法：索引写入与查询构造两侧都在汉字间插空格，退化为单字索引，再用短语查询
+（"加 速 治 疗"）还原子串匹配；中英文共用一张 FTS5 表，无需分词依赖。
 """
 
 from __future__ import annotations
@@ -56,13 +53,8 @@ def is_cjk(ch: str) -> bool:
 
 
 def estimate_tokens(text: str | None) -> int:
-    """粗略估算一段文本的 token 数，用于给上下文预算留位置。
-
-    为什么不用真正的分词器：这里只需要"够准到能做决策"。实测依据——
-    qwen3:8b 下 15,676 字（以英文摘要为主）的材料块占用 4,129 token，
-    本函数给 4,479，误差约 8%，足以判断"提示词会不会把输出挤掉"。
-
-    中日韩字符约 1 token/字；其余（英文、数字、标点）约 1 token/3.5 字。
+    """粗估 token 数（CJK 约 1 token/字，其余约 1 token/3.5 字），用于上下文预算决策；
+    实测误差约 8%，无需真分词器。
 
     >>> estimate_tokens("")
     0
@@ -143,21 +135,10 @@ def build_match_query(
     cjk: str = "phrase",
     prefix: bool = False,
 ) -> str:
-    """把自然语言检索词转换为 FTS5 MATCH 表达式。
-
-    * 英文/数字词元按原样保留，可选加 ``*`` 前缀通配；
-    * 中文被切分为单字后，按 ``cjk`` 策略合并：
-
-      ``phrase``（默认，高精度）
-          相邻单字合成一个短语，等价于连续子串匹配。
-          ``"治 疗 卒 中 后 抑 郁"`` 不会命中「治疗脑卒中后抑郁」。
-      ``bigram``（高召回）
-          相邻单字两两组成重叠二元组再取 AND：``"治疗" AND "疗卒" AND …``。
-          同样对上述文本仍然失败，但对「卒中后抑郁」这类常见改写更宽容。
-
-    实际检索时 :func:`medscholar.db.repo.search_fts` 会按
-    ``phrase → bigram → or`` 逐级放宽，兼顾精度与召回，因此这里保持单一策略、
-    由调用方决定用哪一级。
+    """把自然语言检索词转为 FTS5 MATCH 表达式。英文词元原样保留（可选 * 前缀）；
+    中文单字按 cjk 策略合并：phrase（默认，高精度，相邻单字成短语=连续子串）、
+    bigram（高召回，重叠二元组取 AND，对常见改写更宽容）。本函数只做单一策略，
+    search_fts 按 phrase→bigram→or 逐级放宽。
 
     >>> build_match_query("加速rTMS治疗卒中后抑郁")
     '"加 速" AND "rTMS" AND "治 疗 卒 中 后 抑 郁"'
@@ -177,9 +158,8 @@ def build_match_query(
         if cjk != "bigram" or len(cjk_run) == 1:
             parts.append(fts_quote(" ".join(cjk_run)))
         else:
-            # 二元组必须写成「两个单字token组成的短语」（"治 疗"），
-            # 而不是一个双字 token（"治疗"）—— 因为索引侧的 segment_cjk
-            # 把汉字切成了单字，双字 token 在索引里根本不存在，永远匹配不到。
+            # 二元组必须写成"治 疗"两个单字的短语，不能写双字 token"治疗"：
+            # 索引侧已按单字切分，双字 token 不存在，永远匹配不到。
             bigrams: list[str] = []
             for index in range(len(cjk_run) - 1):
                 bigram = " ".join(cjk_run[index : index + 2])
@@ -260,11 +240,8 @@ _NAME_PARTICLES = frozenset(
 
 
 def to_family_first(name: str | None) -> str:
-    """把西文姓名统一成「姓 名」顺序。
-
-    各数据源的姓名顺序并不一致（PubMed/Crossref 是「姓 名」，
-    OpenAlex/Semantic Scholar/arXiv 是「名 姓」），而引用格式化必须能可靠地
-    提取姓氏，因此在这里统一。
+    """统一西文姓名为「姓 名」顺序：PubMed/Crossref 本是姓 名，
+    OpenAlex/S2/arXiv 是名 姓，引用格式化需可靠提取姓氏故在此统一。
 
     >>> to_family_first("Wei Zhang")
     'Zhang Wei'

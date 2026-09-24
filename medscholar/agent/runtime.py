@@ -1,8 +1,7 @@
-"""Agent 运行时：后台运行、事件流与人机审批。
+"""Agent 运行时：后台 task 运行、事件历史补播与人机审批 Future。
 
-需求里的 Plan → 用户审批是一个真正的暂停点；直接在 HTTP 请求里 await，
-客户端一断线整个任务就没了。因此工作流跑在后台 task 里：事件按顺序追加到
-``history``，断线重连可完整补播；审批用一个 ``Future`` 表示，由
+审批是真正的暂停点，不能在 HTTP 请求里 await（客户端断线即丢任务）：
+事件按序追加到 ``history`` 供断线重连补播，审批 Future 由
 ``POST /api/agent/approve/{run_id}`` 兑现。
 """
 
@@ -58,11 +57,9 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["RunHandle", "AgentRuntime", "get_runtime"]
 
-#: 终止事件类型
 _TERMINAL = {"done"}
 
-#: 典型的界面占位提示前缀。真实的研究课题不会以这些词开头，
-#: 而一旦把占位提示当成课题，就会跑一次十几分钟、结果毫无意义的研究流程。
+#: 界面占位提示前缀；占位文本若被当成课题，会白跑一次十几分钟的无意义流程。
 _PLACEHOLDER_PREFIXES = (
     "例如：", "例如:", "示例：", "示例:", "比如：", "比如:", "如：", "如:",
     "请输入", "请在此输入", "在此输入", "在这里输入", "输入研究课题", "输入课题",
@@ -72,13 +69,10 @@ _PLACEHOLDER_PREFIXES = (
 def normalize_review_chars(
     min_chars: int | None, max_chars: int | None, agent: Any
 ) -> tuple[int, int]:
-    """把界面传来的字数范围夹到合理区间，并保证 min < max。
+    """把前端字数范围夹到合理区间并保证 min < max（不信任前端）。
 
-    兜底规则（不信任前端）：范围缺失或为 0 时用配置默认值；上下限颠倒时交换；
-    越界时夹到 800~40000 字——比 800 短写不出综述，4 万字以上对 8B 本地模型
-    不现实（约 45 tok/s，要跑很久）。
-
-    返回值总是有效区间，调用方可直接使用。
+    缺失用配置默认值、上下限颠倒时交换、越界夹到 800~40000：短于 800
+    写不成综述，4 万字以上对本地 8B 模型不现实。
     """
     low = int(min_chars) if min_chars else 0
     high = int(max_chars) if max_chars else 0
@@ -101,11 +95,9 @@ def normalize_review_chars(
 
 
 def looks_like_placeholder(topic: str) -> bool:
-    """判断课题是否其实是界面上的占位提示文本。
+    """判断课题是否为输入框占位提示文本（浏览器 autofill/粘贴可能带入）。
 
-    实测出现过课题为「例如：加速rTMS治疗卒中后抑郁的疗效与安全性」，
-    即前端输入框的 placeholder 原文（可能来自浏览器 autofill 或粘贴）。
-    前端已做防御；CLI 与 MCP 也走同一个入口，这里再挡一道。
+    Web/CLI/MCP 共用同一入口，这里是最后一道防线。
 
     >>> looks_like_placeholder("例如：rTMS 治疗抑郁")
     True
@@ -233,7 +225,7 @@ class AgentRuntime:
 
         self._runs[state.run_id] = handle
         self._prune()
-        # 落库：服务重启后仍能查到"这次运行存在过、走到哪一步"
+        # 落库运行进度，服务重启后仍可追溯
         try:
             db_upsert_run(
                 state.run_id,
@@ -249,11 +241,7 @@ class AgentRuntime:
         return handle
 
     async def resume(self, run_id: str) -> RunHandle:
-        """从已保存的阶段快照继续一次被中断的运行。
-
-        只重跑没做完的阶段：规划/检索/评估/撰写/审查中已经完成的直接复用。
-        检索和撰写很贵，不能因为一次连接断开就全部重来。
-        """
+        """从阶段快照继续被中断的运行：已完成阶段直接复用，不因断线重来（检索与撰写成本很高）。"""
         row = await asyncio.to_thread(db_get_run, run_id, db=self.db)
         if not row:
             raise ValueError(f"运行 {run_id} 不存在，无法继续。")
@@ -361,14 +349,14 @@ class AgentRuntime:
         """后台执行工作流，把事件推入历史。"""
 
         async def emit(event_type: str, data: dict[str, Any]) -> None:
-            # 阶段快照只落库，不进事件流：里面可能有上万字的草稿
+            # 阶段快照只落库、不进事件流（可能含上万字草稿）
             if event_type == "step":
                 await self._save_step(handle, data)
                 return
             if event_type == "awaiting_approval":
                 handle.status = "awaiting_approval"
             handle.push(AgentEvent(type=event_type, data=data))
-            # 每个阶段切换都同步落库，服务重启后可追溯中断位置
+            # phase 切换同步落库，重启后可追溯中断位置
             if event_type == "phase":
                 await self._persist(handle)
             elif event_type in {"artifact", "done"}:
@@ -509,11 +497,10 @@ class AgentRuntime:
     async def stream(
         self, run_id: str, *, timeout: float = STREAM_TIMEOUT_SECONDS
     ) -> AsyncIterator[AgentEvent]:
-        """产出事件流：先补播历史，再实时跟随，直到 ``done``。
+        """事件流：先补播历史再实时跟随，直到 ``done``。
 
-        不用 ``asyncio.Event`` 做唤醒：Event/Future 会绑定到创建它的事件循环，
-        运行时被跨循环访问（测试里同时跑 ASGITransport 与 uvicorn，或多进程）
-        会静默死锁。改为按 200ms 轮询历史列表，代价可忽略。
+        不用 ``asyncio.Event`` 唤醒：Event/Future 绑定创建时的事件循环，
+        跨循环访问会静默死锁；改为 200ms 轮询 history，代价可忽略。
         """
         handle = self._runs.get(run_id)
         if handle is None:
@@ -526,7 +513,6 @@ class AgentRuntime:
         last_output = time.monotonic()
 
         while True:
-            # 1) 消费所有已产生的事件
             if delivered < len(handle.history):
                 event = handle.history[delivered]
                 delivered += 1
@@ -536,7 +522,6 @@ class AgentRuntime:
                     return
                 continue
 
-            # 2) 运行结束且事件已发完
             if handle.closed:
                 yield AgentEvent(
                     type="done",
@@ -553,7 +538,7 @@ class AgentRuntime:
                 yield AgentEvent(type="done", data={"run_id": run_id, "phase": handle.phase})
                 return
 
-            # 3) 等待新事件；长时间无输出时发心跳，避免代理掐断连接
+            # 长时间无输出时发心跳，避免代理掐断 SSE 连接
             await asyncio.sleep(EVENT_POLL_SECONDS)
             if time.monotonic() - last_output >= HEARTBEAT_SECONDS:
                 last_output = time.monotonic()

@@ -1,14 +1,6 @@
-"""FastAPI 应用：本地 Web 工作台后端的组合根。
+"""FastAPI 组合根：接口拆到 routes/ 六个 APIRouter，共享依赖在 deps.py，本模块只管装配。
 
-本模块只负责"装配"，不负责"实现"：
-
-- 54 个接口按业务标签拆到 ``medscholar/server/routes/`` 的六个 APIRouter；
-- 跨 router 共享的单例与纯函数集中在 ``medscholar/server/deps.py``；
-- ``lifespan`` 生命周期、静态资源挂载、请求模型重导出、模块级 ``app`` 对象
-  仍保留在此，供 CLI / MCP / 冒烟脚本直接 import。
-
-约束：数据库重操作走 ``asyncio.to_thread``，不阻塞事件循环（SSE 需要它保持流畅）；
-单源检索/嵌入/LLM 失败只降级、不抛 500；绝不返回 API Key 明文。
+约束：数据库重操作走 asyncio.to_thread 不阻塞事件循环；单源检索/嵌入/LLM 失败只降级不抛 500；绝不返回 API Key 明文。
 """
 
 from __future__ import annotations
@@ -45,9 +37,7 @@ from .routes.writing import CiteRequest, ExportRequest, FeedbackRequest, Manuscr
 
 logger = logging.getLogger(__name__)
 
-#: 公开入口。列在这里的名字都允许外部 ``from medscholar.server.app import ...``：
-#: 其中请求模型历史上就定义在本模块，拆分后随各自的 router 走，这里只是重导出，
-#: 以保证 ``scripts/smoke_http.py``、CLI、MCP 等既有引用不被破坏。
+#: 请求模型随各自 router 定义，此处重导出以兼容 scripts/CLI/MCP 的既有引用。
 __all__ = [
     "WEB_DIR",
     "_is_resumable",
@@ -80,18 +70,11 @@ __all__ = [
 # ============================================================ 生命周期
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """应用生命周期：单例的唯一初始化点与销毁点。
-
-    数据库、Agent 运行时、数据源注册表都是进程级单例（见 ``deps.py``），
-    这里启动时初始化一次、退出时统一收尾；router 只通过 ``deps`` 取用现成实例，
-    自己不再建一份。
-    """
+    """应用生命周期：进程级单例（DB/Agent 运行时/数据源注册表）的唯一初始化与销毁点。"""
     cfg = get_config()
     cfg.ensure_dirs()
     db = get_db()
-    # 把上次退出时仍在进行中的运行标记为「已中断」。
-    # 否则用户会对着一个永远等不到草稿的页面发呆——实测踩过：
-    # 用户 17:00 发起研究，服务 17:10 重启，运行被杀死，界面既不报错也无内容。
+    # 把上次退出时仍在进行的运行标记为「已中断」，否则前端会无限等待草稿
     try:
         interrupted = await asyncio.to_thread(repo.mark_interrupted_runs, db=db)
         if interrupted:
@@ -120,11 +103,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 # ============================================================ 应用装配
 def create_app() -> FastAPI:
-    """组合根：把 Cors、静态资源、六个业务 router 装进一个 FastAPI 应用。
-
-    顺序：先中间件、再静态资源、最后路由。CORS 与"静态资源禁用缓存"
-    两个中间件的添加次序决定包裹层次（后加的在外层），拆分前也是这个次序。
-    """
+    """装配 CORS、静态资源与六个业务 router；中间件后加的在外层，添加次序不可随意调换。"""
     cfg = get_config()
     app = FastAPI(
         title="MedScholar Agent",
@@ -142,7 +121,6 @@ def create_app() -> FastAPI:
 
     _mount_static(app)
 
-    # 按业务分组挂载：基础 / 文献库 / 检索问答 / Agent 与产物 / 会话课题维护 / 引用写作
     app.include_router(system.router)
     app.include_router(papers.router)
     app.include_router(search.router)
@@ -153,18 +131,9 @@ def create_app() -> FastAPI:
 
 
 def _mount_static(app: FastAPI) -> None:
-    """挂载 ``/static`` 并禁止静态资源被浏览器缓存。
-
-    首页 ``/`` 与 ``/favicon.ico`` 的实现放在 ``routes/system.py``，
-    这里只负责静态目录与响应头。
-    """
+    """挂载 ``/static`` 并禁止浏览器缓存；首页与 favicon 路由在 ``routes/system.py``。"""
     if WEB_DIR.is_dir():
-        # 必须禁用浏览器缓存。
-        #
-        # 纯本地单用户工具，静态资源缓存没有收益，却有致命代价：
-        # 修好前端的 bug 后，用户的浏览器仍在跑旧版 app.js，"修复没生效"。
-        # 实测踩过——服务端日志里完全看不到用户浏览器的请求，因为页面里的旧 JS
-        # 早就放弃了重试。用 no-store 保证每次刷新都拿到当前磁盘上的文件。
+        # 必须 no-store：本地工具静态缓存无收益，浏览器跑旧版 app.js 会表现为"修复不生效"
         app.mount(
             "/static",
             StaticFiles(directory=str(WEB_DIR)),

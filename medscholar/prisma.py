@@ -1,22 +1,12 @@
 """PRISMA 流程数据与报告规范清单（系统评价/Meta 分析的投稿硬要求）。
 
-做系统评价时，期刊强制要求提交 PRISMA 流程图：从"检索到多少条"到"最终纳入多少篇"，
-每一步筛掉多少、为什么筛掉，都必须有数字。研究者现在的做法是拿 Excel 手工数 ——
-而这个过程恰好最容易出错：检索记录、去重结果、全文评估结果分散在不同工具里，
-数一遍要半小时，且每次改检索式都要重数。
+项目各环节本就留有检索日志、去重记录、评估与全文获取结果，据此自动产出
+PRISMA 各环节数字且可复现——换检索式数字自动更新，替代手工在 Excel 里重数。
+边界：
 
-本项目的所有环节本来就有据可查（检索日志、去重记录、评估结果、全文获取结果），
-所以"自动产出 PRISMA 各环节数字"是顺手的事，而且它是可复现的：
-换一次检索式，数字自动跟着变，而不是靠人重数。
-
-边界必须说清楚：
-
-* 本模块只做计数与文本生成，不替用户做纳入/排除决定 ——
-  那是研究者的学术判断，工具只能把决定记录得可审计。
-* 生成的是"PRISMA 流程数据（flow diagram data）"，术语与 2020 版一致；
-  排除理由分类沿用项目 Critic 的实际输出，而不是硬编码标准分类。
-* 不生成图片：矢量图/位图渲染涉及字体与排版，交给用户的绘图工具或期刊模板更稳妥；
-  这里输出的是可直接填进模板的数字与英文短句。
+* 只做计数与文本生成，不替用户做纳入/排除决定——那是研究者的学术判断，工具只让决定可审计；
+* 术语对齐 PRISMA 2020；排除理由分类沿用项目 Critic 的实际输出，不硬编码标准分类；
+* 不生成图片（渲染涉及字体排版，交给绘图工具/期刊模板），只输出可直接填模板的数字与英文短句。
 """
 
 from __future__ import annotations
@@ -39,7 +29,6 @@ class PrismaFlow:
 
     #: 各数据库/登记平台检索到的记录数：``{"pubmed": 120, "openalex": 88}``
     identified: dict[str, int] = field(default_factory=dict)
-    #: 去重移除数
     duplicates_removed: int = 0
     #: 题目/摘要筛选的记录数
     screened: int = 0
@@ -53,7 +42,6 @@ class PrismaFlow:
     assessed_for_eligibility: int = 0
     #: 全文阶段排除：``{"研究设计不符": 12, "无全文": 5}``
     excluded_at_fulltext: dict[str, int] = field(default_factory=dict)
-    #: 最终纳入
     included: int = 0
     #: 其他来源（引文追踪、专家推荐、灰色文献）单独列，PRISMA 要求区分
     identified_from_other: int = 0
@@ -95,9 +83,8 @@ class PrismaFlow:
     def warnings(self) -> list[str]:
         """数字不自洽时给出的中文提示。
 
-        为什么要有：PRISMA 数字必须内部自洽，否则审稿人一眼就能看出来。
-        工具的价值不在于"生成得好看"，而在于把"检索 120 条、筛选 100 条、纳入 30 条"
-        这种对不上的情况在做图之前就拦住。
+        PRISMA 数字必须内部自洽，否则审稿人一眼看穿；价值在于在做图之前
+        就拦住"检索 120、筛选 100、纳入 30"这类对不上的情况。
         """
         problems: list[str] = []
         if self.identified_total == 0 and self.identified_from_other == 0:
@@ -121,9 +108,9 @@ class PrismaFlow:
         return problems
 
 
-#: PRISMA 2020 清单：官方 27 个条目，其中若干条目带子项（10a/10b、13a~13c、16a/16b、
-#: 20a/20b、23a/23b、24a~24c 等），所以这里一共有 35 个编号。
-#: 保留官方编号是为了让研究者能直接对着投稿要求逐条打勾。
+#: PRISMA 2020 清单：官方 27 个条目，若干条目带子项（10a/10b、13a~13c、
+#: 16a/16b、20a/20b、23a/23b、24a~24c 等），共 35 个编号；保留官方编号
+#: 是为了让研究者直接对着投稿要求逐条打勾。
 PRISMA_CHECKLIST: tuple[tuple[str, str, str], ...] = (
     ("1", "Title", "标题中注明是系统评价/Meta 分析"),
     ("2", "Abstract", "结构化摘要（含注册号）"),
@@ -169,14 +156,12 @@ _AUTO_ITEMS: frozenset[str] = frozenset({"6", "7", "16a", "16b", "17", "24a"})
 def prisma_checklist_status(
     flow: PrismaFlow | None = None, *, covered: Iterable[str] | None = None
 ) -> list[dict[str, Any]]:
-    """返回清单各条目的状态：``auto``（工具能填）/ ``manual``（需要人来写）/ ``done``。
+    """返回清单各条目状态：``auto``（工具能填）/ ``manual``（需要人写）/ ``done``。
 
-    条目数见 :data:`PRISMA_CHECKLIST`（官方 27 条，含子项共 35 个编号）。
-    目前只有 6 个编号能被工具自动填（信息来源、检索式、筛选结果、被排除研究清单、
-    纳入研究特征、注册信息），其余都需要研究者自己写 —— 不要把这条能力说成
-    "自动生成 PRISMA 清单"，它只保证"该填数字的那几项自动且自洽"。
-
-    ``covered`` 可由调用方传入"已经在正文里写到的条目号"，用于把清单当投稿自检表用。
+    共 35 个编号（见 :data:`PRISMA_CHECKLIST`），目前只有 6 个能自动填
+    （信息来源、检索式、筛选结果、被排除清单、纳入特征、注册信息），其余靠研究者——
+    不要把这条能力对外说成"自动生成 PRISMA 清单"。
+    ``covered`` 传入"正文里已写到的条目号"，即可把清单当投稿自检表用。
     """
     already = set(covered or ())
     rows: list[dict[str, Any]] = []
@@ -203,11 +188,11 @@ def build_prisma_flow(
     assessed_for_eligibility: int | None = None,
     included_sources: Sequence[str] | None = None,
 ) -> PrismaFlow:
-    """从各环节的原始计数装配 PRISMA 流程。
+    """从各环节原始计数装配 PRISMA 流程。
 
-    这里不做推断：检索数、去重数、排除数都由调用方从真实数据里取。
-    唯一允许推导的是 ``screened`` / ``sought_for_retrieval`` 这类恒等式
-    （进入筛选的 = 去重后的全部记录），因为让调用方再传一遍只会制造不一致的机会。
+    不做推断：检索/去重/排除数都由调用方从真实数据取。唯一允许推导的是
+    ``screened`` / ``sought_for_retrieval`` 这类恒等式（进入筛选数 = 去重后全部记录），
+    让调用方再传一遍只会制造不一致的机会。
     """
     flow = PrismaFlow(
         identified=dict(identified or {}),
@@ -229,9 +214,9 @@ def build_prisma_flow(
 
 
 def render_prisma_text(flow: PrismaFlow) -> str:
-    """渲染成 PRISMA 流程图各框的英文短句（可直接填进期刊模板）。
+    """渲染成流程图各框的英文短句（可直接填进期刊模板）。
 
-    用英文而不是中文：PRISMA 是国际投稿要求，模板与审稿意见都用英文字段名，
+    用英文而非中文：PRISMA 是国际投稿要求，模板与审稿意见都用英文字段名，
     中英对照反而容易在翻译时把数字放错框。
     """
     lines: list[str] = []

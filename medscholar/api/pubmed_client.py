@@ -1,13 +1,5 @@
-"""PubMed E-utilities 客户端（NCBI）。
-
-覆盖 ESearch / EFetch / ELink 三个端点：
-
-* ESearch —— 关键词、MeSH、日期范围检索，返回 PMID 列表
-* EFetch  —— 按 PMID 批量取回完整 XML（标题、摘要、作者、MeSH、DOI、PMCID）
-* ELink   —— 参考文献 / 相似文献
-
-速率：无 Key 3 次/秒，注册免费 Key 后 10 次/秒（配置 ``sources.pubmed.api_key``）。
-"""
+"""PubMed E-utilities 客户端：ESearch（返回 PMID）、EFetch（批量取完整 XML）、
+ELink（参考文献/相似文献）。速率：无 Key 3 次/秒，配 api_key 后 10 次/秒。"""
 
 from __future__ import annotations
 

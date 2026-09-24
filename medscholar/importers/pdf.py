@@ -1,15 +1,6 @@
-"""PDF 解析基础设施（PyMuPDF 适配 + 落地页 PDF 定位 + 失败归类）。
-
-这些函数原在 ``agent/reader.py``，属于基础设施关注点（调用第三方 PDF 库、
-解析 HTML 元信息、把错误字符串归类），不是智能体的决策逻辑。
-原来 ``importers/__init__.py``（Zotero 附件导入需要读 PDF）不得不在函数体里
-``from ..agent.reader import extract_pdf_text``，形成了一条
-基础设施反向依赖应用层的隐藏耦合（懒加载 import，人工 review 很难发现）。
-这条违规是 ``scripts/check_arch.py`` 跑出来的。
-
-搬到 ``importers/`` 后依赖方向就正了：application → infrastructure。
-放在这里而不是新开一个包：导入器与 Reader 都需要它，而它本身没有业务语义，
-属于"把外部格式转成文本"这一类适配器。
+"""PDF 基础设施：PyMuPDF 适配、落地页 PDF 定位、失败归类（外部格式→文本的适配器，
+无业务语义）。放 importers/ 是为消除 importers 懒加载 agent.reader 造成的
+基础设施反向依赖应用层的耦合（scripts/check_arch.py 检出）。
 """
 
 from __future__ import annotations
@@ -29,11 +20,8 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # 失败原因归类
 # ---------------------------------------------------------------------------
-#: (正则, 可读标签, 是否永久)
-#:
-#: "永久" = 再试也不会成功（文献本身没正文、出版商长期拒绝、非开放获取）；
-#: "可重试" = 网络抖动、对方 5xx，下次值得再试。
-#: 顺序敏感：更具体的规则放前面。
+#: (正则, 可读标签, 是否永久)。永久=重试也不会成功（无正文/403/非OA）；
+#: 可重试=网络抖动/5xx。顺序敏感，更具体的规则放前面。
 _ERROR_RULES: tuple[tuple[str, str, bool], ...] = (
     (r"没有提供 JATS 正文", "文献本身没有正文（会议摘要 / 勘误 / 社论等）", True),
     (r"出版商拒绝了自动下载|HTTP 403", "出版商风控拒绝自动下载（403）", True),
@@ -75,11 +63,7 @@ _MAX_PDF_BYTES = 40 * 1024 * 1024
 
 
 def _pdf_available() -> tuple[bool, str]:
-    """探测 PDF 解析后端。
-
-    PyMuPDF 1.24+ 推荐 ``import pymupdf``；旧的 ``import fitz`` 已标记为弃用
-    （实测 1.28.2 会打印 DeprecationWarning）。这里优先用新名字，旧版回退到 ``fitz``。
-    """
+    """探测 PyMuPDF 后端：1.24+ 优先 import pymupdf，旧版回退 import fitz（fitz 已弃用）。"""
     try:
         import pymupdf  # type: ignore
 
@@ -147,14 +131,9 @@ _PDF_HREF_RE = re.compile(r"""href\s*=\s*["']([^"']+\.pdf(?:\?[^"']*)?)["']""", 
 
 
 def extract_pdf_url(html: str, base_url: str) -> str:
-    """从文章落地页里找出真正的 PDF 地址。
-
-    很多数据源（OpenAlex / Crossref）给出的 ``full_text_url`` 其实是文章网页
-    而不是 PDF，直接下载网页当然拿不到——实测这一条占失败原因的 27%。
-
-    出版商为了被学术搜索收录，普遍会在页面里声明标准的
-    ``<meta name="citation_pdf_url">``（Google Scholar 规范）。用它定位 PDF
-    是公开、正当的做法，不需要绕过任何访问控制。
+    """从落地页找真正 PDF 地址：很多数据源给的 full_text_url 是网页而非 PDF（实测占
+    失败原因 27%），优先用页面公开声明的 <meta name="citation_pdf_url">（Google Scholar
+    规范，正当手段不绕访问控制），再兜底找首个 .pdf 链接。
 
     >>> extract_pdf_url('<meta name="citation_pdf_url" content="/a.pdf">', 'https://x.org/p')
     'https://x.org/a.pdf'

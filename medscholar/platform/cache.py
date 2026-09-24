@@ -1,19 +1,9 @@
-"""进程内缓存：TTL + 容量上限 + 命中率统计。
+"""进程内缓存：TTL + 容量上限（LRU）+ 命中率统计。
 
-为什么不用 functools.lru_cache：
-
-* 没有 TTL。缓存永不过期等于把旧值固化；新文献入库后搜不到是典型症状。
-* 没有失效钩子。导入/删除文献后必须能按前缀清掉相关缓存。
-* 没有命中率统计。命中率 0.02 的缓存只是白耗内存。
-
-缓存什么、不缓存什么：
-
-* 缓存：查询向量（同一检索词反复出现，嵌入是一次网络/模型调用）、数据集统计这类纯函数结果。
-* 不缓存：LLM 生成结果。用户期望"重新生成"能得到不同结果；按温度采样本来就非确定；
-  而且缓存命中会让"用哪次的结果"不可追溯——本项目核心卖点是可审计，宁可慢一点。
-
-线程安全用 ``threading.Lock`` 而不是 ``asyncio.Lock``：缓存会在同步与异步两条路径上被用到，
-asyncio 锁会把同步调用点逼成 await，漏一个 await 就是静默失效。锁内只做纯内存操作。
+不用 functools.lru_cache：需要 TTL（否则新文献入库后旧搜索结果永久不失效）、
+按前缀失效钩子和命中率统计。只缓存查询向量、数据集统计等纯函数结果；
+不缓存 LLM 生成（温度采样非确定，且缓存命中会让"用哪次结果"不可追溯，违背可审计卖点）。
+用 threading.Lock 而非 asyncio.Lock：同步/异步两条路径共用，锁内只做纯内存操作。
 """
 
 from __future__ import annotations
@@ -64,12 +54,8 @@ class CacheStats:
 class TTLCache(Generic[K, V]):
     """带 TTL 与 LRU 淘汰的进程内缓存。
 
-    Args:
-        name: 缓存名（出现在统计与失效日志里）。
-        ttl: 生存时间（秒）。``None`` 表示不过期（仅用于手动失效的纯函数缓存）。
-        maxsize: 最大条目数，超出按 LRU 淘汰。
-        clock: 时间源，可注入以便测试瞬时过期（不要用真实 sleep 测 TTL，
-            那会让测试变慢，慢测试的下场是被跳过）。
+    ``ttl=None`` 表示不过期（仅用于手动失效的纯函数缓存）；
+    ``clock`` 可注入，测试用假时钟验证过期，不依赖真实 sleep。
     """
 
     def __init__(
@@ -117,10 +103,10 @@ class TTLCache(Generic[K, V]):
                 self.stats.evictions += 1
 
     def get_or_set(self, key: K, factory: Callable[[], V]) -> V:
-        """命中就返回；未命中才调用 ``factory``。
+        """命中就返回；未命中才在锁外调用 ``factory``。
 
-        ``factory`` 在锁外执行——它可能是网络调用或模型推理，持锁执行会把整个缓存变成串行瓶颈。
-        代价是并发未命中时可能重复计算一次，这个取舍是刻意的：重复算一次远小于所有请求排队。
+        factory 可能是网络调用或模型推理，持锁执行会把缓存变成串行瓶颈；
+        代价是并发未命中可能重复计算一次——刻意取舍，重复算远小于全体排队。
         """
         hit = self.get(key)
         if hit is not None:
@@ -173,12 +159,9 @@ _REGISTRY_LOCK = threading.Lock()
 def cache_registry(
     name: str, *, ttl: float | None = 300.0, maxsize: int = 512
 ) -> TTLCache[Any, Any]:
-    """按名字取（或建）一个全局缓存。
+    """按名字取（或建）一个全局缓存，便于统计一次看全、失效一次清干净。
 
-    用注册表而不是让每个模块自己 new 一个：这样 ``clear_all_caches()``
-    与 ``/api/metrics`` 能一次看全、一次清干净。
-    同名缓存必须参数一致，否则会拿到先注册的那个（调用点分散时这是最容易踩的坑，
-    所以这里用「先到先得 + 文档写明」而不是静默覆盖）。
+    同名缓存以先注册的参数为准，不静默覆盖——调用点分散时参数不一致是高发坑。
     """
     with _REGISTRY_LOCK:
         cache = _CACHES.get(name)
@@ -197,10 +180,9 @@ def cached(
 ) -> Callable[[Callable[..., V]], Callable[..., V]]:
     """把函数结果按 ``key(*args, **kwargs)`` 缓存起来的装饰器。
 
-    ``key`` 必须是纯函数，且返回可哈希的值。显式要求调用方给出 key 函数，
-    而不是自动用参数元组：很多参数（数据库连接、配置对象）不可哈希或语义上不该参与 key，
-    自动推导会在运行时抛 `unhashable type`，或者更糟——生成一个永远不命中的 key
-    让缓存静默失效。
+    显式要求传入纯函数 ``key``（返回可哈希值），不自动用参数元组：
+    数据库连接、配置对象等不可哈希或语义上不该参与 key，自动推导要么运行时抛
+    ``unhashable type``，要么生成永不命中的 key 让缓存静默失效。
     """
 
     def decorator(func: Callable[..., V]) -> Callable[..., V]:

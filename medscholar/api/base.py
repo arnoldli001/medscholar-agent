@@ -149,11 +149,8 @@ class BaseClient(ABC):
             self._client_loop = asyncio.get_running_loop()
 
     async def _ensure_client(self) -> None:
-        """确保客户端存在且属于当前事件循环。
-
-        httpx.AsyncClient 连接池绑定创建它的循环；跨循环复用会让请求永久挂起。
-        客户端会被注册表长期缓存，因此每次请求前都校验一次循环归属。
-        """
+        """确保客户端存在且属于当前事件循环。连接池绑定创建时的循环，跨循环复用
+        会永久挂起；客户端被注册表长期缓存，故每次请求前校验循环归属并重建。"""
         loop = asyncio.get_running_loop()
         if self._client is not None and self._owns_client and self._client_loop is not loop:
             logger.debug("%s：事件循环变化，重建 HTTP 客户端", self.name)
@@ -196,15 +193,8 @@ class BaseClient(ABC):
         last_error: Exception | None = None
         await self._ensure_client()
 
-        # 文本类端点（JATS XML / Atom / HTML）的内容协商很严格：
-        # 默认的 `Accept: application/json` 会被 Europe PMC 直接判为 406 Not Acceptable。
-        # 实测同一个 URL：
-        #     Accept: application/json → 406
-        #     Accept: text/xml         → 406
-        #     Accept: application/xml  → 200
-        #     Accept: */*              → 200
-        # 这个坑曾让整条开放获取全文管道全部失效（99 篇有 PMCID 的一篇都取不到），
-        # 因此对非 JSON 请求统一改用 `*/*`。
+        # 内容协商坑：Europe PMC 文本端点对 Accept: application/json/text/xml 直接 406，
+        # 只有 application/xml 与 */* 返回 200（曾导致整条 OA 全文管道失效），非 JSON 统一 */*。
         send_headers = dict(headers or {})
         if expect != "json":
             send_headers.setdefault("Accept", "*/*")

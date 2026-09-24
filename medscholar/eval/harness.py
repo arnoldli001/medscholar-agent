@@ -1,15 +1,8 @@
-"""评测框架：把语料装进临时库，按多种检索配置跑一遍并对比。
+"""评测框架：语料装进临时库，按多组检索配置跑一遍并对比。
 
-最重要的约束：评测必须跑在生产代码路径上。
-所以这里直接调用 ``search_fts`` / ``search_vector`` / ``rrf_fuse``——
-即 ``hybrid_search`` 内部所用的同一组原语，并配一个一致性测试断言
-"评测里的 ``production`` 配置 == ``hybrid_search`` 的输出"。
-否则就是在评测一个自己重写的检索器，指标再漂亮也没有意义。
-
-另一条约束：结果必须可复现。语料装进临时数据库，
-文献 id 用 1..N 的确定性序号（``source_id``），与用户真实库无关；
-嵌入用同一模型时结果逐位一致。CI 里用 ``hashing`` 提供方，
-因此完全离线、无随机性。
+约束一：直接调用生产原语 search_fts/search_vector/rrf_fuse，不另写检索器，
+verify_production_parity 断言 production 配置 == hybrid_search 输出。
+约束二：可复现——语料 id 用 1..N 确定性序号，CI 用 hashing 提供方，离线无随机。
 """
 
 from __future__ import annotations
@@ -71,8 +64,7 @@ class RetrievalConfig:
         }
 
 
-#: 消融矩阵。刻意包含"只用一路"与"两路融合"，以及 RRF 的 k 值扫描——
-#: "k=60 是论文推荐值"这类说法应该被数据检验，而不是被引用。
+#: 消融矩阵：单路/融合 + RRF k 值扫描，推荐值要用数据检验而非引用。
 CONFIGS: tuple[RetrievalConfig, ...] = (
     RetrievalConfig(
         name="bm25-only", use_fts=True, use_vector=False,
@@ -185,10 +177,10 @@ def index_corpus(
     workdir: Path | None = None,
     embed: bool = True,
 ) -> tuple[Database, Path]:
-    """把语料装进一个临时数据库（幂等、确定性）。返回 (db, workdir)。
+    """把语料装进临时数据库（确定性），返回 (db, workdir)。
 
-    id 由语料顺序决定（``source_id`` = 1..N），并通过 ``insert_paper`` 真实入库，
-    因此走的是与生产完全一样的去重/索引/落库路径。
+    id 由语料顺序决定（source_id = 1..N），经 insert_paper 真实入库，
+    走与生产完全一样的去重/索引/落库路径。
     """
     tmp = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="medscholar-eval-"))
     tmp.mkdir(parents=True, exist_ok=True)
@@ -381,10 +373,7 @@ def check_regression(
     thresholds: Mapping[str, float],
     config_name: str = "production",
 ) -> list[str]:
-    """对照阈值检查是否退化。返回违规说明（空表示通过）。
-
-    阈值写在 CI 里，只在低于下限时才失败，因此不会因为"变得更好"而报错。
-    """
+    """对照下限阈值检查退化，返回违规说明（空表示通过）；只在低于下限时失败。"""
     result = next((r for r in report.results if r.config.name == config_name), None)
     if result is None:
         return [f"报告里没有配置 {config_name}，无法做回归判定"]
@@ -406,10 +395,9 @@ def check_regression(
 def verify_production_parity(
     dataset: EvalDataset, *, config: AppConfig | None = None, k: int = 10
 ) -> list[int]:
-    """一致性自检：评测里的 ``production`` 配置是否与 ``hybrid_search`` 一致。
+    """一致性自检：评测 production 配置与 hybrid_search 输出是否一致。
 
-    这是"没有评测自己重写的检索器"这句声明的可执行证据。
-    返回不一致的查询下标（空列表表示完全一致）。
+    返回不一致的查询下标（空列表表示完全一致），是"未重写检索器"声明的可执行证据。
     """
     from ..db.repo import hybrid_search
 

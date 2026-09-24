@@ -1,10 +1,4 @@
-"""Formatter Agent：引用格式化与成稿校验（需求 3.1）。
-
-把正文里的数字引用标记按目标格式渲染（数字制 ``[1]``，作者-年份制
-``(Zhang, 2023)``）；生成参考文献表（APA 7th / Vancouver / GB-T 7714 /
-BibTeX / RIS）；校验引用完整性——正文引用了但参考文献表没有的编号、
-参考文献表里有但正文从未引用的条目；并落盘导出多种格式。
-"""
+"""Formatter Agent：引用渲染（数字制 ``[1]`` / 作者-年份制）、参考文献表生成（APA/Vancouver/GB-T 7714/BibTeX/RIS）、成稿校验与导出。"""
 
 from __future__ import annotations
 
@@ -94,11 +88,7 @@ class FormatterAgent:
         entries: Sequence[tuple[int, Paper]],
         style: str = "gb7714",
     ) -> str:
-        """把 ``[n]`` 形式的引用标记渲染成目标样式的文内引用。
-
-        数字制样式（Vancouver / GB-T 7714）保持 ``[n]``；
-        作者-年份制样式（APA / Chicago）改写为 ``(Zhang, 2023)``。
-        """
+        """把 ``[n]`` 渲染成目标样式：数字制（Vancouver/GB-T 7714）保持不变，作者-年份制改写为 ``(Zhang, 2023)``。"""
         style = detect_style(style)
         index_to_paper = {index: paper for index, paper in entries}
 
@@ -133,12 +123,7 @@ class FormatterAgent:
         *,
         only_cited: str | None = None,
     ) -> str:
-        """生成参考文献表。
-
-        Args:
-            only_cited: 传入正文时，只输出正文真正引用过的条目（推荐，
-                避免"参考文献表里有但正文没引"的常见问题）。
-        """
+        """生成参考文献表；``only_cited`` 传入正文时只输出正文真正引用过的条目。"""
         style = detect_style(style)
         papers = [paper for _index, paper in entries]
         if only_cited is not None:
@@ -151,11 +136,10 @@ class FormatterAgent:
     def reference_entries(
         self, entries: Sequence[tuple[int, Paper]], style: str = "gb7714"
     ) -> list[dict[str, Any]]:
-        """结构化参考文献列表（供右栏「引用列表」渲染并支持点击跳转）。
+        """结构化参考文献列表（供前端「引用列表」渲染与点击跳转）。
 
-        ``text`` 必须是完整的参考文献文本，而不是文内引用短标：早期版本
-        误用了 ``format_inline``，导致数字制样式下这个字段只剩一个 ``[1]``，
-        前端引用列表因此只显示编号、看不到文献信息。
+        ``text`` 必须是完整参考文献条目，不能用 ``format_inline`` 的文内短标
+        （数字制下短标只剩一个 ``[1]``，列表会看不到文献信息）。
         """
         style = detect_style(style)
         out: list[dict[str, Any]] = []

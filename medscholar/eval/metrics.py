@@ -1,19 +1,7 @@
-"""检索评测指标（纯函数，无 IO、无依赖）。
+"""检索评测指标（纯函数无 IO）：recall@k、precision@k、reciprocal_rank、
+average_precision、ndcg@k（支持分级相关性），手算用例钉死边界情形。
 
-错误的指标比没有指标更糟：它会把检索改动调向错误方向，而且看起来一切正常。
-所以这里的每个函数都在 `tests/test_eval_metrics.py` 里用手算结果钉死，
-包括边界情形（无相关文献、k 大于结果数、并列名次）。
-
-指标定义（沿用信息检索的标准定义）：
-
-* ``recall@k``      = |相关 ∩ 前k| / |相关|
-* ``precision@k``   = |相关 ∩ 前k| / k
-* ``reciprocal_rank`` = 1 / 第一个相关结果的名次（没有则 0）
-* ``average_precision`` = 相关位置上的 precision 的平均（没有相关则 0）
-* ``ndcg@k``        = DCG@k / IDCG@k，支持二元或分级相关性
-
-约定：没有标注相关文献的查询不参与聚合（返回 ``None`` 而非 0）。
-把"没标注"当成"检索失败"会污染整体指标。
+约定：无标注相关文献的查询返回 None 而非 0，不参与聚合——把"没标注"当"检索失败"会污染指标。
 """
 
 from __future__ import annotations
@@ -50,11 +38,7 @@ def _dedupe_keep_order(items: Iterable[Any]) -> list[Any]:
 
 
 def retrieved_ids(ranked: Sequence[Any]) -> list[str]:
-    """把任意排名的结果统一成 ``["1", "2", ...]`` 形式的 id 列表。
-
-    统一成字符串是为了让"数据集里的 id"与"检索返回的 paper_id"
-    能用同一个比较口径（避免 int/str 混用导致的静默不匹配）。
-    """
+    """把任意排名统一成字符串 id 列表，避免数据集 id 与 paper_id int/str 静默不匹配。"""
     out: list[str] = []
     for item in ranked:
         if isinstance(item, (int, str)):
@@ -121,10 +105,7 @@ def reciprocal_rank(retrieved: Sequence[str], relevant: Iterable[str]) -> float 
 
 
 def average_precision(retrieved: Sequence[str], relevant: Iterable[str]) -> float | None:
-    """AP：在**每个相关结果的位置**上取 precision，再对相关总数取平均。
-
-    注意分母是「相关文献总数」而不是「命中的数量」—— 漏掉的相关文献会拉低 AP，
-    这正是我们想要的行为。
+    """AP：每个相关位置的 precision 对相关总数取平均（分母是相关总数而非命中数，漏检会拉低 AP）。
 
     >>> average_precision(["1", "2", "3", "4"], {"1", "3"})
     0.8333333333333333
@@ -263,11 +244,7 @@ def _mean(values: Sequence[float | None]) -> float | None:
 
 
 def aggregate(per_query: Sequence[QueryMetrics]) -> dict[str, Any]:
-    """聚合多个查询。只对"有标注"的查询求均值。
-
-    另外单独报告 ``skipped``（没有标注相关文献而被跳过的查询数），
-    避免"用跳过的方式把指标做漂亮"。
-    """
+    """聚合多查询：只对有标注的查询求均值，另报 skipped 计数，避免用跳过美化指标。"""
     scored = [m for m in per_query if m.num_relevant > 0]
     skipped = len(per_query) - len(scored)
     return {

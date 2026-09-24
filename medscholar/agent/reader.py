@@ -1,14 +1,6 @@
-"""Reader Agent：全文解析与精读（需求 3.1）。
+"""Reader Agent：按 Europe PMC JATS → PubMed PMC → OA PDF 获取开放获取文献全文并生成速读笔记。
 
-按「Europe PMC JATS → PubMed PMC → OA PDF」获取开放获取文献全文，
-解析成纯文本落入 ``paper_fulltext``（含 FTS5 索引），并生成单篇速读笔记
-（研究设计 / 对象 / 干预 / 结局 / 局限）。非开放获取文献只保留元数据与
-出版商链接，不绕过付费墙。PDF 解析依赖可选的 PyMuPDF，未安装时给出
-安装指引而不是静默失败。
-
-PDF 解析、落地页 PDF 定位、失败归类这些基础设施能力在
-:mod:`medscholar.importers.pdf`，本模块导入并重导出：Zotero 附件导入
-（infrastructure）也要读 PDF，留在应用层会让基础设施反向依赖上层。
+非 OA 只留元数据不绕过付费墙；PyMuPDF 可选。PDF 基础设施在 medscholar.importers.pdf，此处重导出供导入器复用。
 """
 
 from __future__ import annotations
@@ -52,9 +44,7 @@ __all__ = [
     "PDF_AVAILABLE",
 ]
 
-#: 失败原因归类、PDF 后端探测等实现已搬到 ``medscholar/importers/pdf.py``：
-#: 它们是基础设施关注点，且被导入器复用。此处的名字由上面的 import 重导出，
-#: 既有调用方（含测试与脚本）不受影响。
+#: 失败归类、PDF 后端探测等实现在 medscholar/importers/pdf.py，上面的 import 重导出以兼容既有调用方。
 
 
 @dataclass(slots=True)
@@ -123,13 +113,7 @@ class ReaderAgent:
 
     # ---------------------------------------------------------------- 全文
     async def fetch_fulltext(self, paper: Paper, *, persist: bool = True) -> FullTextResult:
-        """按「Europe PMC → PubMed PMC → OA PDF」顺序取全文。
-
-        失败时返回的 ``error`` 要说明真正试过什么、卡在哪一步。
-        早期实现无论哪一步失败都回落到同一句"该文献非开放获取"，
-        对有 PMCID 的文献是误导——会让人以为该文献本就不该有全文。
-        这里逐级记录尝试轨迹。
-        """
+        """按 Europe PMC → PubMed PMC → OA PDF 顺序取全文，``error`` 逐级记录实际尝试轨迹与卡点。"""
         paper_id = paper.paper_id or 0
 
         if persist and paper_id:
@@ -140,7 +124,7 @@ class ReaderAgent:
         tried: list[str] = []
         last_oa_error = ""
 
-        # 1) Europe PMC（覆盖 800 万+ OA 全文，带 JATS 正文）
+        # 1) Europe PMC JATS
         if paper.pmcid or paper.is_open_access:
             tried.append("Europe PMC")
             try:
@@ -152,7 +136,7 @@ class ReaderAgent:
             if text:
                 return self._store(paper, text, "europepmc", self._epmc_url(paper), persist)
 
-        # 2) PubMed 的 PMC 子集
+        # 2) PubMed PMC 子集
         if paper.pmcid:
             tried.append("PubMed PMC")
             try:
@@ -166,9 +150,7 @@ class ReaderAgent:
                     paper, text, "pubmed-pmc", f"https://www.ncbi.nlm.nih.gov/pmc/articles/{paper.pmcid}/", persist
                 )
 
-        # 3) Unpaywall：按 DOI 找合法的开放获取副本。
-        #    很多文献只有 DOI（既无 PMCID 也没标 OA），这是它们唯一的全文路径；
-        #    Unpaywall 只返回 OA 链接，不涉及任何认证绕过。
+        # 3) Unpaywall：很多文献只有 DOI，这是其唯一全文路径；只返回合法 OA 链接，无认证绕过
         if paper.doi:
             tried.append("Unpaywall")
             try:
@@ -196,7 +178,7 @@ class ReaderAgent:
                     return result
                 last_oa_error = result.error or ""
 
-        # 4) 开放获取 PDF（仅有链接且明确 OA 时才下载）
+        # 4) OA PDF（仅有链接且明确 OA 时才下载）
         if paper.full_text_url and paper.is_open_access:
             tried.append("OA PDF")
             result = await self._fetch_pdf(paper, persist=persist)
@@ -208,7 +190,6 @@ class ReaderAgent:
                 error=f"{result.error or 'PDF 全文获取失败'}（已尝试：{'、'.join(tried)}）",
             )
 
-        # 到这里说明四种路径都没走通，按实际情况给出准确原因
         if last_oa_error:
             reason = f"Unpaywall 找到了开放获取链接，但下载失败：{last_oa_error}"
         elif paper.pmcid:
@@ -245,15 +226,10 @@ class ReaderAgent:
         return response.content, (response.headers.get("content-type") or "").lower(), ""
 
     async def _fetch_pdf(self, paper: Paper, *, persist: bool) -> FullTextResult:
-        """下载并解析开放获取 PDF。
+        """下载并解析 OA PDF。
 
-        两点实测约束：
-
-        1. 出版商普遍拒绝自动化下载（ScienceDirect 403、部分机构仓储 405），
-           属对方风控策略，不绕过；
-        2. 数据源给的链接常是文章网页而非 PDF（约占失败原因的 27%）。
-           遇到 HTML 时用出版商为学术搜索声明的标准 ``citation_pdf_url``
-           元数据定位真正的 PDF 地址后重试，实测能明显提高成功率。
+        出版商风控拒绝自动下载（403/405）时不绕过；数据源链接常是落地页而非 PDF
+        （约占失败 27%），遇 HTML 时用标准 ``citation_pdf_url`` 元数据定位真 PDF 后重试。
         """
         url = paper.full_text_url
         paper_id = paper.paper_id or 0
@@ -268,7 +244,7 @@ class ReaderAgent:
             timeout=httpx.Timeout(PDF_DOWNLOAD_TIMEOUT, connect=PDF_CONNECT_TIMEOUT),
             follow_redirects=True,
             headers={
-                # 部分站点对 Accept 也做校验；用通配更稳
+                # 部分站点校验 Accept 头，通配更稳
                 "Accept": "application/pdf, text/html, application/octet-stream, */*",
                 "User-Agent": "MedScholarAgent/1.0 (academic research; contact via config)",
             },
@@ -277,7 +253,7 @@ class ReaderAgent:
             if error:
                 return FullTextResult(paper_id, error=error)
 
-            # 不是 PDF 而是网页 → 尝试从页面里找出真正的 PDF 地址
+            # 落地页而非 PDF：从 HTML 的 citation_pdf_url 找真 PDF 地址重试
             if not data[:PDF_MAGIC_BYTES].startswith(b"%PDF") and ("html" in content_type or data[:200].lstrip()[:1] == b"<"):
                 try:
                     html = data.decode("utf-8", "replace")

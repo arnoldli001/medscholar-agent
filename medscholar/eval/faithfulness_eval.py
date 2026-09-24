@@ -1,16 +1,7 @@
-"""衡量校验器本身准不准（evaluate the evaluator）与报告渲染。
-
-没衡量过的校验器和没有校验器在可信度上差别不大。这里：
-
-1. 用人工标注集（`datasets/faithfulness.json`）跑校验器；
-2. 输出混淆矩阵 + 每类 precision/recall，而不是一个笼统的准确率——
-   漏报（supported 实为 contradicted）与误报（contradicted 实为正常）
-   后果完全不同；
-3. 标注集里特意放了语义改写导致词面重合低的条目，
-   用来度量 Tier 0 代理指标的固有误报。
-
-诚实声明（也写进报告）：标注集由本项目作者编写、条目边界清晰，
-因此它证明的是"规则在无歧义案例上可靠"，不能声称达到人类一致水平。
+"""校验器自评（evaluate the evaluator）与报告渲染：在人工标注集上跑 Tier 0 规则，
+输出混淆矩阵与逐类/二分类 precision/recall（漏报与误报后果不同，不看笼统准确率），
+并用语义改写条目度量词面代理指标的固有误报。诚实声明：标注集作者自编、边界清晰，
+只证明规则在无歧义案例上可靠，不能声称达到人类一致水平（声明也写进报告）。
 """
 
 from __future__ import annotations
@@ -59,8 +50,7 @@ class LabeledCase:
     expected_rule: str | None = None
     note: str = ""
     source_meta: dict[int, dict[str, Any]] = field(default_factory=dict)
-    #: 明确声明哪些编号"存在"。用于区分「越界引用」与「编号存在但拿不到全文」——
-    #: 这是两件后果完全不同的事，必须能分开标注。
+    #: 显式声明"存在"的编号，用于区分越界引用与存在但拿不到全文。
     valid_ids: list[int] | None = None
 
     def claim(self) -> Claim:

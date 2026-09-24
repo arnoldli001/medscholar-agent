@@ -1,14 +1,5 @@
-"""Europe PMC 客户端。
-
-Europe PMC 是覆盖面与开放程度都很好的免费数据源：
-
-* ``/search``（``resultType=core``）—— 4000 万+ 文献元数据 + 摘要 + MeSH + 引用数
-* ``cursorMark`` 游标分页 —— 可稳定翻取大结果集
-* ``/{source}/{id}/fullTextXML`` —— 800 万+ 开放获取全文（本项目的全文主力）
-* ``/{source}/{id}/references`` / ``/citations`` —— 引用图谱
-
-无 Key 可用，公开速率约 10 次/秒。
-"""
+"""Europe PMC 客户端：/search（resultType=core，cursorMark 游标分页）、
+fullTextXML（OA 全文主力）、references/citations。无 Key，公开速率约 10 次/秒。"""
 
 from __future__ import annotations
 
@@ -48,9 +39,7 @@ class EuropePMCClient(BaseClient):
     def _build_query(query: str, filters: SearchFilters | None) -> str:
         """翻译为 Europe PMC 查询语法（``AND`` + 字段标签）。"""
         parts = [f"({query.strip()})"] if query.strip() else []
-        # SRC:PPR = 预印本（medRxiv / bioRxiv / Research Square 等都由 Europe PMC 索引），
-        # 所以不需要再单独接 medRxiv 客户端。
-        # 之前这行注释写成"排除预印本重复"，与实际的 OR 逻辑相反，已更正。
+        # SRC:PPR 已覆盖 medRxiv/bioRxiv 等预印本，无需再接预印本客户端。
         parts.append("(SRC:MED OR SRC:PMC OR SRC:PPR OR SRC:AGR OR SRC:PAT)")
         if filters:
             if filters.year_from:
@@ -277,15 +266,10 @@ class EuropePMCClient(BaseClient):
 
     # ---------------------------------------------------------------- 全文
     async def fulltext(self, paper: Paper) -> str:
-        """获取开放获取全文纯文本；非 OA 文献一律返回空串（不越权）。
+        """获取 OA 全文纯文本，非 OA 返回空串（不越权）。
 
-        实测 URL 形态：
-
-        * ``/PMC/{PMCID}/fullTextXML``  → 404
-        * ``/MED/{PMID}/fullTextXML``   → 404
-        * ``/{PMCID}/fullTextXML``      → 200，返回 JATS 正文
-
-        即全文端点不带 source 段，直接以 PMCID 作为路径；PMID 与 DOI 均不可用。
+        URL 坑：端点不带 source 段，直接 ``/{PMCID}/fullTextXML``（/PMC/{id} 与
+        /MED/{pmid} 均 404）；PMID、DOI 不可用。
         """
         if not (paper.is_open_access or paper.pmcid):
             return ""

@@ -1,11 +1,7 @@
-"""Writer Agent：综述与摘要生成（需求 3.1）。
+"""Writer Agent：基于评估后的文献材料流式生成综述正文、章节、摘要与结论。
 
-基于评估后的文献材料流式生成带引用的综述正文、章节、摘要与结论。
-
-引用约束：正文里的 ``[n]`` 只能用
-:class:`~medscholar.agent.state.AgentState` 的 ``citation_map`` 里存在的
-编号；成稿后由 :class:`~medscholar.agent.formatter.FormatterAgent`
-统一校验并剔除越界引用，避免幻觉编号留在成稿里。
+引用约束：正文 ``[n]`` 只能用 ``AgentState.citation_map`` 中存在的编号，
+成稿后由 FormatterAgent 校验并剔除越界引用，避免幻觉编号留在成稿里。
 """
 
 from __future__ import annotations
@@ -54,9 +50,9 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["WriterAgent", "DEFAULT_OUTLINE"]
 
-#: 材料块按"论文数上限 / 单篇摘要字数"逐档收缩，直到给正文留出足够上下文。
-#: num_ctx 是提示词与输出的共享预算（本地 8 GB 显存下只能开到 8192），
-#: 材料塞满就会把正文挤没。第一档的极大值表示不限篇数，先试最丰富的材料。
+#: 材料块按 (篇数上限, 单篇摘要字数) 逐档收缩，直到给正文留出足够上下文。
+#: num_ctx 是提示词与输出的共享预算（8GB 显存下仅 8192），材料塞满会挤掉正文；
+#: 第一档极大值表示不限篇数，先试最丰富的材料。
 _DIGEST_LADDER: tuple[tuple[int, int], ...] = (
     (1_000_000, 800),
     (1_000_000, 500),
@@ -159,13 +155,10 @@ class WriterAgent:
         total_min_chars: int = 0,
         total_max_chars: int = 0,
     ) -> str:
-        """逐章节撰写综述，返回完整 Markdown 草稿。
+        """逐章节流式撰写综述，返回完整 Markdown 草稿。
 
-        Args:
-            on_token: ``async def on_token(text: str)`` 流式回调。
-            min_chars / max_chars: 单节目标字数（未给 total_* 时生效）。
-            total_min_chars / total_max_chars: 整篇正文的目标字数区间，
-                给出后按章节数均分到每一节。
+        ``on_token`` 为流式回调；给出 total_min/max_chars 整篇目标区间时按章节数均分，
+        否则用单节 min_chars/max_chars。
         """
         if not entries:
             return (
@@ -180,7 +173,7 @@ class WriterAgent:
             min_chars = max(SECTION_MIN_CHARS, total_min // section_count)
             max_chars = max(min_chars + SECTION_CHARS_GAP, total_max_chars // section_count)
 
-        # 单节输出需要的 token 数：实测 qwen3 中文约 1.7 字/token，留出余量
+        # qwen3 中文实测约 1.7 字/token，据此估单节输出 token 并留余量
         want_tokens = int(max_chars / CHARS_PER_TOKEN) + TOKEN_SAFETY_MARGIN
         digest = _fit_digest(
             entries,
@@ -189,7 +182,7 @@ class WriterAgent:
             system_prompt=SECTION_SYSTEM,
         )
         prompt_tokens = estimate_tokens(digest) + estimate_tokens(SECTION_SYSTEM)
-        # 剩余可生成量：不能让提示词把输出挤到 0（早期"只写了几百字"就有这个原因）
+        # 剩余可生成量：不能让提示词把输出空间挤到 0
         headroom = max(MIN_HEADROOM, self.config.llm.num_ctx - prompt_tokens - TOKEN_RESERVE)
         token_cap = max(MIN_TOKEN_CAP, min(want_tokens, headroom, MAX_TOKEN_CAP))
         logger.info(
@@ -362,7 +355,6 @@ def _sanitize(text: str, valid_ids: Sequence[int]) -> str:
         return "[" + ",".join(kept) + "]"
 
     cleaned = _CITATION_RE.sub(replace, text or "")
-    # 清理因删除引用留下的空白与空标点
     cleaned = re.sub(r"\s+([，。；、）])", r"\1", cleaned)
     cleaned = re.sub(r"\(\s*\)", "", cleaned)
     return cleaned.strip()

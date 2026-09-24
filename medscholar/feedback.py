@@ -1,22 +1,11 @@
-"""反馈、质疑与学习闭环。
+"""反馈、质疑与学习闭环——回答"用户点的那一下踩、写的那条纠错，到底改变了后面的什么行为"：
 
-这个模块回答一个很具体的问题：用户点的那一下"踩"和写的那条纠错，
-到底改变了系统后面的什么行为？ 如果什么都没改变，那"强化学习"就只是
-一个界面装饰。这里给出三条真正会生效的闭环：
-
-1. 纠错记忆（即时生效，无需训练）
-   用户质疑「某篇文献的结论说反了」并给出正确说法后，这条纠错会作为
-   few-shot 记忆注入后续同主题的写作/评审提示词里，减少同类错误复发。
-
-2. 偏好对导出（离线生效）
-   ``up`` / ``down`` 与 ``corrected_text`` 构成 ``(prompt, chosen, rejected)``
-   三元组，可导出成 DPO / RLHF 训练数据（JSONL）。这是把真实使用数据
-   变成模型能力提升的正规路径；本模块只负责生成合规的训练集，
-   不在运行时做梯度更新（本地 8B 量化模型上做在线 RL 不现实，也不该假装能做）。
-
-3. 来源与文献重加权（即时生效）
-   被反复质疑的文献在后续检索中降权；某数据源若长期被用户否决，其排序权重下降。
-   这让"知识库越用越准"成为可测量的行为，而不是口号。
+1. 纠错记忆（即时生效，无需训练）：带正确说法的质疑作为 few-shot 记忆注入后续
+   同主题的写作/评审提示词，减少同类错误复发；
+2. 偏好对导出（离线生效）：``up``/``down`` 与 ``corrected_text`` 构成
+   ``(prompt, chosen, rejected)`` 三元组导出 DPO/RLHF JSONL；本模块只生成合规训练集，
+   运行时不做梯度更新（本地 8B 量化模型上做在线 RL 不现实，也不假装能做）；
+3. 来源与文献重加权（即时生效）：被反复质疑的文献/长期被否决的数据源在后续检索降权。
 """
 
 from __future__ import annotations
@@ -211,10 +200,10 @@ def correction_memories(
     limit: int = 5,
     db: Database | None = None,
 ) -> list[dict[str, str]]:
-    """取出可作为 few-shot 记忆的纠错（即时生效的那条闭环）。
+    """取出可作为 few-shot 记忆的纠错（即时生效的闭环）。
 
-    优先取同主题的；主题不同的也保留少量（通用性错误同样值得记住）。
-    只取给出了正确说法的质疑 —— 光说"错了"没有可复用的信息。
+    优先同主题，再补少量跨主题（通用性错误同样值得记）；
+    只取给出了正确说法的质疑——光说"错了"没有可复用信息。
     """
     sql = (
         "SELECT topic, category, comment, corrected_text, quoted_text "
@@ -247,9 +236,8 @@ def correction_memories(
 
 
 def memories_as_prompt(topic: str = "", *, limit: int = 5, db: Database | None = None) -> str:
-    """把纠错记忆渲染成可直接拼进提示词的一段文本。
-
-    返回空串表示没有记忆 —— 调用方据此决定是否插入，避免无谓的提示词膨胀。
+    """把纠错记忆渲染成可直接拼进提示词的文本；无记忆返回空串，
+    调用方据此决定是否插入，避免无谓的提示词膨胀。
     """
     items = correction_memories(topic=topic, limit=limit, db=db)
     if not items:
@@ -275,9 +263,8 @@ def export_preference_pairs(
 ) -> list[dict[str, Any]]:
     """导出 DPO 风格偏好对。
 
-    一条 ``down`` 或 ``challenge`` 反馈若能配上"正确版本"，就构成
-    ``(prompt, chosen, rejected)``：chosen 是用户给的正确说法，
-    rejected 是模型当初的输出。这是把线上数据变成训练数据的正规做法。
+    一条 ``down``/``challenge`` 反馈配上"正确版本"即构成
+    ``(prompt, chosen, rejected)``：chosen 是用户给的正确说法，rejected 是模型原输出。
     """
     rows = _db(db).query(
         "SELECT * FROM feedback WHERE verdict IN ('down', 'challenge') "
@@ -323,12 +310,10 @@ def export_jsonl(path: str, *, limit: int = 1000, db: Database | None = None) ->
 
 # ================================================ 3) 文献 / 来源重加权
 def paper_penalty(*, db: Database | None = None, max_penalty: float = 0.5) -> dict[int, float]:
-    """哪些文献被反复质疑？返回 ``{paper_id: 惩罚系数}``（1.0 表示不惩罚）。
+    """返回 ``{paper_id: 惩罚系数}``（1.0 表示不惩罚），用于检索后重排。
 
-    用于检索后重排：被用户明确指出问题（如"结论说反了"）的文献，
-    在下次综述里降权，减少同一个坑踩第二次。
-    只统计带纠错内容的质疑，纯"踩"不计入 —— 避免因为口味不同就把
-    有价值的文献永久压下去。
+    被明确指出事实/引用/过度推断问题且带纠错的文献下次降权，避免同一个坑踩第二次。
+    纯"踩"不计入——口味不同不该把有价值的文献永久压下去。
     """
     rows = _db(db).query(
         "SELECT target_id, COUNT(*) AS n FROM feedback "
@@ -348,9 +333,9 @@ def paper_penalty(*, db: Database | None = None, max_penalty: float = 0.5) -> di
 
 
 def source_penalty(*, db: Database | None = None, min_ratio: float = 0.6, min_samples: int = 5):
-    """哪些数据源被用户反复否决？返回 ``{source: 系数}``。
+    """返回 ``{source: 系数}``：哪些数据源被反复否决。
 
-    样本太少时不作判断（``min_samples``），否则一两次差评就会永久改变排序。
+    样本数低于 ``min_samples`` 不作判断，否则一两次差评就会永久改变排序。
     """
     rows = _db(db).query(
         "SELECT target_id, verdict FROM feedback WHERE target_type = 'search_result' LIMIT 5000"

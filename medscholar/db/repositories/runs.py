@@ -1,9 +1,4 @@
-"""运行记录、阶段快照与产物：agent_runs / run_steps / artifacts。
-
-这三张表服务的是"一次研究运行能不能续跑、草稿在哪"，
-不参与文献、检索与向量逻辑，只被 Agent 运行时与草稿页读写；
-生命周期也一致（运行被删时它的阶段快照一并消失），所以单独拆出来。
-"""
+"""运行记录、阶段快照与产物：agent_runs / run_steps / artifacts（支持断点续跑与草稿）。"""
 
 from __future__ import annotations
 
@@ -78,11 +73,7 @@ def list_runs(*, limit: int = 30, db: Database | None = None) -> list[dict[str, 
 
 
 def mark_interrupted_runs(*, db: Database | None = None) -> int:
-    """把上次退出时仍在进行中的运行标记为「已中断」。
-
-    服务启动时调用。用户刷新页面能看到"那次运行被中断了"，
-    而不是对着一个永远等不到内容的草稿页签。
-    """
+    """服务启动时把仍 running/awaiting_approval 的运行标记为「已中断」。"""
     database = _db(db)
     with database.transaction() as conn:
         cur = conn.execute(
@@ -167,12 +158,8 @@ def latest_run_for_session(session_id: int, *, db: Database | None = None) -> di
 def run_step_phases(
     run_ids: Sequence[str], *, db: Database | None = None
 ) -> dict[str, list[str]]:
-    """一次查出多份运行各自的已完成阶段（按流水线顺序）。
-
-    用来判断"这次运行还能不能接着跑"。不能用 agent_runs.phase 判断：
-    被中断的运行那一列往往是 await_approval，不属于流水线阶段。
-    这里用单条 IN 查询，避免按运行逐条查（N+1）。
-    """
+    """一次 IN 查询多份运行各自的已完成阶段（按流水线顺序），避免 N+1。
+    能否续跑要看 run_steps 而非 agent_runs.phase：中断运行的 phase 常是 await_approval。"""
     ids = [str(r) for r in run_ids if r]
     if not ids:
         return {}

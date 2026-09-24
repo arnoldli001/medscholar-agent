@@ -1,10 +1,6 @@
-"""Semantic Scholar Graph API 客户端。
+"""Semantic Scholar Graph API 客户端：引用图谱与 TLDR 质量较好。
 
-引用图谱（``references`` / ``citations``）与 TLDR 机器摘要质量较好，
-供 Critic Agent 评估影响力和综述回溯奠基工作。
-
-限流：无 Key 约 100 次 / 5 分钟（≈0.33 次/秒），有 Key 1000 次 / 5 分钟。
-无 Key 时 429 很常见，连续被限流时主动把令牌桶速率减半，不硬撞限流墙。
+限流：无 Key 约 100 次/5 分钟，429 常见；连续被限流时令牌桶速率主动减半，不硬撞墙。
 """
 
 from __future__ import annotations

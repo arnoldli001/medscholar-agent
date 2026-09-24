@@ -1,15 +1,7 @@
-"""Ollama 后端（本地推理）：报文构造、响应解析、分段耗时日志。
+"""Ollama 后端（本地推理）：/api/chat 报文、流式响应解析、分段耗时日志。
 
-作为 Mixin 混入 :class:`~medscholar.llm.client.LLMClient`。宿主必须提供：
-
-* ``self.settings`` —— LLMSettings（model / keep_alive / think / num_ctx …）
-* ``self.client`` —— 已建立的 ``httpx.AsyncClient``（属性，未初始化时会抛 LLMError）
-* ``self._breaker_key`` —— 熔断器标识
-* ``self._resolve_base_url()`` / ``self._record(...)``
-
-拆出来的原因：Ollama 与 OpenAI 兼容这两套后端互不相关，
-挤在同一个类里会让"改 DeepSeek 的分支要在 Ollama 的代码里找位置"。
-Mixin 让每套后端的实现各自成文件，宿主类只保留生命周期与路由。
+作为 Mixin 混入 LLMClient，宿主需提供 settings/client/_breaker_key/
+_resolve_base_url()/_record()。
 """
 
 from __future__ import annotations
@@ -91,11 +83,7 @@ class OllamaBackend:
         self._log_timing(data)
         return str((data.get("message") or {}).get("content") or "")
     def _log_timing(self, data: Mapping[str, Any]) -> None:
-        """把 Ollama 的分段耗时写进日志。
-
-        没有这些数字时，「规划很慢」只能靠猜：真正的元凶可能是模型重新加载
-        （keep_alive 到期）、显存不足、或系统内存吃紧导致权重页被换出。
-        """
+        """把加载/提示/生成分段耗时写日志，用于区分慢在模型重载、显存不足还是权重换出。"""
         try:
             load = float(data.get("load_duration") or 0) / 1e9
             prompt = float(data.get("prompt_eval_duration") or 0) / 1e9

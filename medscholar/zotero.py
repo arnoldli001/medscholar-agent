@@ -1,19 +1,13 @@
-"""Zotero 本地库桥接。
+"""Zotero 本地库桥接：读本机 ``zotero.sqlite`` 拿题录与 PDF 路径，对用户已合法
+持有的文件做全文提取与索引——不需要任何下载或认证。本模块只读，绝不写回 Zotero 数据。
 
-为什么这条路径特别合适：你用 Zotero + 学校代理把 PDF 合法收进本地库之后，
-MedScholar 只需要读本机数据库就能拿到题录和 PDF 路径，然后对
-"你已经合法持有的文件"做全文提取与索引 —— 不需要任何下载或认证。
+踩过的坑：
 
-实现要点（都是踩过的坑）：
-
-* Zotero 运行时锁着 ``zotero.sqlite``，直接连会失败或读到不一致状态，
-  因此先复制到临时文件再读（只读，绝不写回）；
-* 附件路径形如 ``storage:文件名.pdf``，实际位置是
-  ``<data_dir>/storage/<itemKey>/<文件名>``，要按 key 拼出来；
-* 只认 ``storage:`` 附件；``attachments:``（链接附件）指向用户自选的目录，
-  这里只记录路径不猜测。
-
-本模块只读，不会修改 Zotero 数据。
+* Zotero 运行时锁着 ``zotero.sqlite``（WAL 模式），直连会 locked 或读到半截状态，
+  先复制到临时文件再读；
+* 附件路径 ``storage:文件名.pdf`` 的实际位置是
+  ``<data_dir>/storage/<附件itemKey>/<文件名>``；
+* 只认 ``storage:`` 附件；``attachments:``（链接附件）指向用户自选目录，只记录不猜路径。
 """
 
 from __future__ import annotations
@@ -127,10 +121,10 @@ class ZoteroItem:
 
 
 def find_zotero_dir(explicit: str | Path | None = None) -> Path | None:
-    """定位 Zotero 数据目录（含 ``zotero.sqlite`` 的那个目录）。
+    """定位 Zotero 数据目录（含 ``zotero.sqlite`` 的目录）。
 
-    优先用显式配置；否则依次试常见位置。找不到返回 ``None``，
-    由调用方给出"请在设置里填 Zotero 数据目录"的提示。
+    优先级：显式配置 → ``ZOTERO_DATA_DIR`` → 常见位置（含 OneDrive 同步目录）。
+    找不到返回 ``None``，由调用方提示用户在设置里手填。
     """
     candidates: list[Path] = []
     if explicit:
@@ -140,7 +134,6 @@ def find_zotero_dir(explicit: str | Path | None = None) -> Path | None:
         [
             home / "Zotero",
             home / "Documents" / "Zotero",
-            # Windows 上 Zotero 也可能装在 OneDrive 同步目录下
             home / "OneDrive" / "Zotero",
             home / "OneDrive" / "文档" / "Zotero",
         ]
@@ -161,8 +154,8 @@ def find_zotero_dir(explicit: str | Path | None = None) -> Path | None:
 def _open_readonly_copy(db_path: Path) -> tuple[sqlite3.Connection, Path]:
     """把数据库复制到临时文件后以只读方式打开。
 
-    Zotero 正在运行时原库被锁，直接连会 ``database is locked``；
-    而且它是 WAL 模式，边写边读可能读到半截状态。复制一份最稳。
+    Zotero 运行时原库被锁（``database is locked``），且 WAL 模式下边写边读
+    可能读到半截状态；复制一份最稳，调用方负责在用完后 rmtree 临时目录。
     """
     tmp_dir = Path(tempfile.mkdtemp(prefix="medscholar-zotero-"))
     target = tmp_dir / "zotero.sqlite"
@@ -186,12 +179,9 @@ def read_zotero_library(
     limit: int | None = None,
     types: Iterable[str] | None = None,
 ) -> list[ZoteroItem]:
-    """读取 Zotero 本地库的全部条目（只读）。
+    """读取 Zotero 本地库条目（只读；``data_dir=None`` 时自动探测）。
 
-    Args:
-        data_dir: Zotero 数据目录；``None`` 时自动探测。
-        limit: 最多返回多少条（按加入时间倒序）。
-        types: 只读这些条目类型；默认见 :data:`_ITEM_TYPES`。
+    ``limit`` 按加入时间倒序截断；``types`` 默认见 :data:`_ITEM_TYPES`。
     """
     resolved = find_zotero_dir(data_dir)
     if resolved is None:
@@ -314,9 +304,8 @@ def _read_items(
 def _resolve_attachment(data_dir: Path, item_key: str, path: str) -> str:
     """把 ``storage:文件名.pdf`` 解析成真实路径；解析不了返回空串。
 
-    ``item_key`` 必须是附件条目自己的 key：Zotero 的
-    ``storage/<目录名>`` 用的是附件 key，而不是父文献的 key。
-    传父 key 会永远解析失败 —— PDF 明明在库里，却一个也索引不到。
+    坑：``item_key`` 必须是附件条目自己的 key——Zotero 的 ``storage/<目录名>``
+    用附件 key 而非父文献 key，传父 key 会 PDF 明明在库里却一个都索引不到。
     """
     if not path:
         return ""

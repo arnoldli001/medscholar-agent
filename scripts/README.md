@@ -58,18 +58,6 @@
 |---|---|
 | `setup_portable_python.py` | 在工作区构建自包含 Python 运行时（`.python/`）。已内置，一般不需要重跑 |
 
-## 故障排查（一次性诊断工具）
-
-这些脚本是为定位具体问题写的，遇到同类问题可以直接复用：
-
-| 脚本 | 排查什么 |
-|---|---|
-| `probe_endpoints.py` | 各 API 的**原始响应结构**（写/修解析器前先看这个，别猜） |
-| `probe_fulltext.py` | 开放获取全文的 URL 形态（Europe PMC 的坑：`/{PMCID}/fullTextXML` 不带 source 段） |
-| `probe_chinese.py` | 中文文献通路：CNKI 接口现状 + OpenAlex `language:zh` / PubMed `chinese[la]` 对比 |
-| `probe_embed.py` | 嵌入进度与 Ollama 批量嵌入耗时（怀疑嵌入卡住时先跑这个） |
-| `probe_hang.py` | 逐端点最小化复现，定位哪个接口会挂住 |
-
 ## 注意
 
 * **`.bat` 文件必须保持「纯 ASCII + CRLF」。** 这是硬约束，不是风格偏好：

@@ -1,15 +1,5 @@
-"""Unpaywall 客户端：按 DOI 查合法的开放获取副本。
-
-本地库里大量文献只有 DOI、没有 PMCID，Europe PMC 覆盖不到，也没有
-``full_text_url``。Unpaywall 索引了机构库/预印本/期刊的 OA 副本，
-按 DOI 一查即可定位免费版本。
-
-只返回开放获取链接，不做认证绕过；API 免费，要求带联系邮箱
-（``sources.unpaywall.email``）。
-
-接口：``GET https://api.unpaywall.org/v2/{doi}?email=you@example.com``
-文档：https://unpaywall.org/products/api
-"""
+"""Unpaywall 客户端：按 DOI 定位机构库/预印本/期刊的合法 OA 副本，
+不做认证绕过；免费但要求带联系邮箱（sources.unpaywall.email）。"""
 
 from __future__ import annotations
 
@@ -26,11 +16,7 @@ __all__ = ["UnpaywallClient", "OALocation", "is_valid_email"]
 
 
 def is_valid_email(value: str | None) -> bool:
-    """Unpaywall 要求真实邮箱；这里只做基本形状校验。
-
-    邮箱为空时不猜不编，直接跳过并提示用户配置 ——
-    用假邮箱调用不礼貌，也可能被限流。
-    """
+    """邮箱基本形状校验；为空时不猜不编，直接跳过提示用户配置（假邮箱不礼貌且可能被限流）。"""
     text = (value or "").strip()
     if "@" not in text:
         return False
@@ -66,12 +52,7 @@ class OALocation:
 
 
 class UnpaywallClient(BaseClient):
-    """Unpaywall 客户端。
-
-    注意：它不是"检索数据源"，只按 DOI 查 OA 位置，
-    因此不注册到 ``SourceRegistry._CLIENT_TYPES``，也不会出现在
-    数据源选择里；只有 Reader 取全文时会用到它。
-    """
+    """只按 DOI 查 OA 位置，不是检索数据源：不注册到 _CLIENT_TYPES，仅供 Reader 取全文。"""
 
     name = "unpaywall"
     label = "Unpaywall"
@@ -92,10 +73,7 @@ class UnpaywallClient(BaseClient):
         return (self.settings.email or "").strip()
 
     async def lookup(self, doi: str) -> dict[str, Any] | None:
-        """查询一个 DOI，返回 Unpaywall 原始记录；未收录返回 ``None``。
-
-        404 表示"这个 DOI 不在 Unpaywall 里"，是正常结果，不抛异常。
-        """
+        """查询 DOI 的原始记录，未收录返回 None（404 是正常结果，不抛异常）。"""
         clean = (doi or "").strip()
         if not clean:
             return None

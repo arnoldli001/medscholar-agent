@@ -1,26 +1,9 @@
 """CNKI 公开检索客户端（默认关闭，仅元数据）。
 
-2026-02 复核结论：search.cnki.com.cn 结果页已改为纯前端 JS 渲染，
-服务端 HTML（约 39 KB）不含文献条目；数据接口返回 HTTP 403。
-不引入浏览器渲染就无法稳定获取元数据。
-
-本模块默认 ``enabled: false``，被调用时抛 :class:`SourceError`
-并给出替代方案，不静默返回空结果。
-
-合规边界：
-
-* 只访问公开检索页，不登录、不绕过付费墙、不破解验证码；
-* 只提取标题、作者、期刊、年份、摘要、关键词等元数据；
-* 不下载、不缓存、不再分发任何全文；全文请通过机构合法授权获取。
-
-如需重新启用：
-
-1. 配置 ``sources.cnki.base_url`` 指向你自己部署的渲染服务；
-2. 使用机构订阅的 CNKI 官方接口/镜像（需自行取得授权）；
-3. 直接用替代通路（推荐）：
-   * ``OpenAlexClient`` 的 ``language:zh`` 过滤
-   * ``PubMedClient`` 的 ``chinese[la]`` 过滤
-   * ``CrossrefClient`` —— 注册了 DOI 的中文期刊
+格式坑：search.cnki.com.cn 结果页已改为纯前端 JS 渲染，服务端 HTML 不含条目、
+数据接口 403，无浏览器渲染无法稳定取数；故调用时抛 SourceError 并给替代方案，
+不静默返回空。合规：只访问公开检索页，不登录/不绕付费墙/不破验证码，仅取元数据，
+不下载缓存全文。替代通路：OpenAlex(language:zh)、PubMed(chinese[la])、Crossref。
 """
 
 from __future__ import annotations
@@ -61,8 +44,7 @@ _SUMMARY_RE = re.compile(
     r'<p[^>]*class="[^"]*(?:summary|abstract)[^"]*"[^>]*>(?P<body>.*?)</p>',
     re.IGNORECASE | re.DOTALL,
 )
-# 「作者：…」在 CNKI 结果页里是独立的 info 段落，必须单独取；
-# 早期实现把 info 也算进摘要，导致摘要被写成「作者：张三;李四;」（实测踩到）。
+# 「作者：…」是独立 info 段落须单独取；并入摘要会把"作者：…"写进摘要字段。
 _INFO_RE = re.compile(
     r'<p[^>]*class="[^"]*info[^"]*"[^>]*>(?P<body>.*?)</p>',
     re.IGNORECASE | re.DOTALL,

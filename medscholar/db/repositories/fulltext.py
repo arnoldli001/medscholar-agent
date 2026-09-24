@@ -1,8 +1,7 @@
-"""开放获取全文：正文与 FTS 索引的保存/读取、全文回填候选筛选、抓取失败记录。
+"""开放获取全文：正文/FTS 保存读取、回填候选筛选、抓取失败记录。
 
-全文是"慢、会失败、要能反复跑"的独立流程：有自己的表
-（paper_fulltext / fulltext_attempts）、自己的重试语义（永久失败 vs 可重试），
-和文献元数据的生命周期完全不同，所以单独拆出来。
+独立于文献元数据的慢流程：有 paper_fulltext/fulltext_attempts 两张表，
+失败分永久失败与可重试两类，需支持反复执行。
 """
 
 from __future__ import annotations
@@ -57,19 +56,9 @@ def get_fulltext(paper_id: int, *, db: Database | None = None) -> str:
 def fulltext_candidates(
     *, limit: int = 20, only_missing: bool = True, db: Database | None = None
 ) -> list[Paper]:
-    """挑出「最可能抓到开放获取全文」的文献，供全文回填使用。
-
-    排序策略直接决定回填成功率：
-
-    1. 有 PMCID 的排最前：Europe PMC / PMC 的 JATS 全文接口稳定可用，实测成功率最高；
-    2. 其次是只有 OA 链接的：要去出版商站点下 PDF，实测常被 403/405 拒绝
-       （ScienceDirect、部分机构仓储会挡自动化请求），属于正常现象，不该硬闯；
-    3. 同类内按被引数降序，优先补齐重要的文献。
-
-    另外会跳过两类：已有全文的、以及已确认永久取不到的
-    （见 :func:`record_fulltext_attempt`）。因此本操作可以反复执行，
-    不会把没有正文的会议摘要之类反复重试。
-    """
+    """挑出最可能抓到 OA 全文的文献。有 PMCID 的优先（PMC JATS 接口稳定），
+    其次仅有 OA 链接的（出版商站点常 403/405 挡自动化请求，不硬闯），同类按被引降序。
+    跳过已有全文与已标记永久失败的，可反复执行。"""
     database = _db(db)
     sql = (
         "SELECT p.paper_id FROM papers p "
@@ -93,12 +82,8 @@ def fulltext_candidates(
 def record_fulltext_attempt(
     paper_id: int, error: str, *, permanent: bool, db: Database | None = None
 ) -> None:
-    """记录一次全文抓取失败，供下次跳过。
-
-    ``permanent=True`` 表示"确定取不到"（文献本身没有正文、出版商长期拒绝、
-    非开放获取等），下次 :func:`fulltext_candidates` 会直接跳过；
-    网络超时、5xx 这类**可重试**的错误则不标记，留待下次再试。
-    """
+    """记录一次抓取失败。permanent=True（无正文/长期拒绝/非 OA）下次直接跳过；
+    超时、5xx 等可重试错误不标记 permanent，留待下次再试。"""
     database = _db(db)
     with database.transaction() as conn:
         conn.execute(

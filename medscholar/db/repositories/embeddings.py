@@ -1,8 +1,6 @@
-"""嵌入向量：float32 序列化、L2 归一化，以及 paper_embeddings 表的读写。
+"""嵌入向量：float32 小端序列化、L2 归一化与 paper_embeddings 读写。
 
-"向量长什么样"是一个独立的契约：检索侧（KNN 与纯 Python 回退）
-和嵌入管道都要按同一份序列化/归一化规则来，混在检索代码里就会出现两处真相，
-所以单独拆出来。
+序列化/归一化是检索侧与嵌入管道共用的唯一契约，两处必须一致。
 """
 
 from __future__ import annotations

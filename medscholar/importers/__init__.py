@@ -1,10 +1,5 @@
-"""题录导入：解析 → 去重 → 入库 → 补齐向量 → 返回报告。
-
-与"检索"共用同一条落库与嵌入管线，导入进来的文献立刻能被
-本地检索（FTS + 向量）命中，也能被综述引用。
-
-本模块只处理用户自己导出/提供的题录文件，
-不联网抓取任何数据库，也不涉及任何账号认证。
+"""题录导入：解析 → 去重 → 入库 → 补向量 → 报告，与检索共用同一条落库/嵌入管线，
+导入后立即可被本地检索与综述引用。只处理用户自导出的题录文件，不联网、不碰认证。
 """
 
 from __future__ import annotations
@@ -230,11 +225,8 @@ def import_paths(
 
 
 def _read_text(path: Path) -> str:
-    """读题录文件：优先 UTF-8，失败则回退 GBK（中文数据库导出常见）。
-
-    用 ``errors="replace"``：老导出的编码很杂，
-    宁可个别字符变 ``?``，也不该让整份文件导入失败。
-    """
+    """读题录文件：按 utf-8-sig/utf-8/gb18030/utf-16 顺序尝试，全失败用 replace——
+    老导出编码杂，宁可个别字符变 ? 也不让整份导入失败。"""
     raw = path.read_bytes()
     for encoding in ("utf-8-sig", "utf-8", "gb18030", "utf-16"):
         try:
@@ -260,11 +252,7 @@ async def import_from_zotero(
     config: AppConfig | None = None,
     db: Database | None = None,
 ) -> ImportReport:
-    """把本机 Zotero 库导入 MedScholar，并可选索引本地 PDF 全文。
-
-    合规方式：Zotero 里的 PDF 是用户自己合法取得的，
-    MedScholar 只读本机文件、只做本地索引，不下载也不认证。
-    """
+    """导入本机 Zotero 库并可选索引本地 PDF 全文；只读本机文件做本地索引，不下载不认证。"""
     from ..zotero import read_zotero_library, to_papers
 
     report = ImportReport(format="zotero")
@@ -300,10 +288,7 @@ async def _index_local_pdfs(
     db: Database | None,
     limit: int,
 ) -> tuple[int, int]:
-    """把 Zotero 里的本地 PDF 解析成全文并入库（建立全文索引）。
-
-    只处理**本地已存在**的文件；读不到就跳过，绝不联网补齐。
-    """
+    """把本地已存在的 PDF 解析成全文入库；读不到就跳过，绝不联网补齐。"""
     from ..db.repo import find_paper_id, save_fulltext
     from .pdf import extract_pdf_text
 

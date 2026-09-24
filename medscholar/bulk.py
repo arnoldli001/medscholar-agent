@@ -1,20 +1,17 @@
 """官方批量数据包导入（PubMed baseline / PMC Open Access Subset）。
 
-这是"合法爬取"的正确形态：这些数据是 NLM / Europe PMC 主动发布给
-批量使用的，README 明确允许下载、文本挖掘与再分发（PMC OA 子集）。
+这是"合法爬取"的正确形态：数据由 NLM / Europe PMC 主动发布给批量使用，
+README 明确允许下载、文本挖掘与再分发（PMC OA 子集）。
 
-* PubMed baseline：每年一次的 37M+ 条题录 XML（解压后约 40 GB）
+* PubMed baseline：每年一次的 37M+ 条题录 XML（解压约 40 GB）
   https://pubmed.ncbi.nlm.nih.gov/download/
 * PMC Open Access Subset：FTP 上的全文包（.tar.gz，含 .nxml/PDF）
   https://www.ncbi.nlm.nih.gov/pmc/tools/ftp/
 
-工程要点（不这么做就会 OOM 或跑不完）：
-
-* 用 ``iterparse`` 流式解析，处理完一个 ``<PubmedArticle>`` 立刻
-  ``elem.clear()`` —— 一次性 ``parse()`` 一个 1 GB 的 XML 必然爆内存；
-* PMC 的 tar.gz 用 ``r|gz`` 流式模式读（不能 seek，因此顺序处理）；
-* 必须能按关键词/年份过滤：全量 3700 万条不可能都入库，
-  默认只收命中主题的那些。
+工程要点（不这么做就会 OOM 或跑不完）：``iterparse`` 流式解析，处理完一个
+``<PubmedArticle>`` 立刻 ``elem.clear()``（一次性 parse 1 GB XML 必爆内存）；
+PMC 的 tar.gz 用 ``r|gz`` 流式读（不能 seek，只能顺序处理）；必须能按关键词/年份
+过滤——3700 万条不可能全入库，默认只收命中主题的。
 """
 
 from __future__ import annotations
@@ -222,8 +219,8 @@ def parse_pubmed_article(elem: ET.Element) -> Paper | None:
 def iter_pubmed_xml(path: str | Path) -> Iterator[Paper]:
     """流式产出 XML 文件里的文献（内存占用与文件大小无关）。
 
-    支持两种情况：整个文件是 ``<PubmedArticleSet>``，或者文件里是
-    多个顶层 ``<PubmedArticle>``（NLM 的分卷文件就是这样）。
+    支持整个文件是 ``<PubmedArticleSet>``，或多个顶层 ``<PubmedArticle>``
+    （NLM 的分卷文件就是这样）。
     """
     file_path = Path(path)
     if file_path.suffix.lower() == ".gz":
@@ -253,7 +250,7 @@ def _iter_pubmed_stream(handle: Any) -> Iterator[Paper]:
 def parse_jats(nxml: bytes | str) -> tuple[Paper, str] | None:
     """解析 JATS（``.nxml``）全文，返回 ``(Paper, 全文)``。
 
-    PMC OA 子集里每篇是 ``<pmcid>.nxml``，既有题录也有正文，是全文的主力来源。
+    PMC OA 子集里每篇是 ``<pmcid>.nxml``，题录与正文都在里面，是全文主力来源。
     """
     try:
         root = ET.fromstring(nxml)

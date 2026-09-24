@@ -1,8 +1,5 @@
-"""arXiv 客户端（预印本）。
-
-医学影像 / 神经调控 / 脑机接口等方向的工作常先发在 arXiv 或 medRxiv。
-arXiv 无 PMID/MeSH、不覆盖临床医学主体，默认只作补充来源，不参与去重优先级判断。
-"""
+"""arXiv 客户端（预印本，Atom API）。无 PMID/MeSH、不覆盖临床医学主体，
+默认仅作补充来源，不参与去重优先级。"""
 
 from __future__ import annotations
 
@@ -50,11 +47,8 @@ class ArxivClient(BaseClient):
 
     @staticmethod
     def _candidate_queries(query: str) -> list[str]:
-        """渐进放宽的查询序列：精确短语 → 全部实词 AND → 前几个实词 AND。
-
-        arXiv 的相关度排序对长自然语言查询很弱（实测整句短语常常 0 命中，
-        而宽松 OR 又会返回完全无关的论文），因此这里逐级放宽并对结果做词面校验。
-        """
+        """渐进放宽：精确短语 → 全部实词 AND → 前 3 个实词 AND。arXiv 排序对长
+        自然语言查询很弱（整句常 0 命中、宽松 OR 全是噪声），需逐级放宽并做词面校验。"""
         query = _clean(query)
         if not query:
             return []

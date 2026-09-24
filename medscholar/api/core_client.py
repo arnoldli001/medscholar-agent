@@ -1,11 +1,6 @@
-"""CORE 客户端（聚合全球机构知识库）。
+"""CORE 客户端：聚合全球机构知识库（学位论文/技术报告/自存档录用稿）。
 
-机构库（大学/研究所自建库）里的学位论文、技术报告、会议论文和作者自存档
-的录用稿，PubMed / OpenAlex / Crossref 收录不全；CORE 聚合了上万个机构库。
-
-需要免费 API Key（注册后立即得到）：https://core.ac.uk/services/api
-未配置 key 时注册表会跳过本客户端，不会报错中断检索。
-接口：``GET https://api.core.ac.uk/v3/search/works?q=...``
+需免费 API Key；未配置时 enabled() 返回 False，注册表跳过而非中断检索。
 """
 
 from __future__ import annotations

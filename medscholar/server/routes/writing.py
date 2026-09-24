@@ -1,12 +1,4 @@
-"""引用、论文写作与学习闭环路由。
-
-* ``tags=["引用"]``：引用样式清单、按样式格式化引用、导出文件；
-* ``tags=["论文写作"]``：IMRaD 初稿生成与数字溯源校验、稿件列表/详情/复检；
-* ``tags=["学习闭环"]``：赞/踩/质疑的反馈记录，以及"纠正立刻变成记忆"的可见进度。
-
-三组放在一起是因为它们共用同一条链路：引用格式化既服务于写作，也服务于导出；
-而用户的纠错记忆会在下次写作时被带进提示词（不需要重新训练模型）。
-"""
+"""引用、论文写作（IMRaD）与学习闭环路由；三者共用引用格式化链路，用户纠错记忆会带入下次写作提示词（无需重训）。"""
 
 from __future__ import annotations
 
@@ -73,11 +65,7 @@ class ExportRequest(BaseModel):
 # ============================================================ 用户反馈与学习闭环
 @router.post("/api/feedback", tags=["学习闭环"])
 async def submit_feedback(req: FeedbackRequest) -> dict[str, Any]:
-    """记录赞/踩/质疑。
-
-    质疑若带上了「正确说法」，会立刻成为后续生成的纠错记忆
-    （见 feedback.memories_as_prompt），不需要重新训练模型。
-    """
+    """记录赞/踩/质疑；带「正确说法」的质疑会成为后续生成的纠错记忆（见 feedback.memories_as_prompt），无需重训。"""
     from ...feedback import FeedbackEntry, record_feedback
 
     entry = FeedbackEntry(
@@ -336,23 +324,16 @@ async def prisma_flow(
     excluded_screening: int = Query(0, ge=0, description="题目/摘要阶段排除数"),
     not_retrieved: int = Query(0, ge=0, description="未获取到全文的报告数"),
 ) -> dict[str, Any]:
-    """按 PRISMA 2020 口径汇总本次检索流程的数字，并给出自检提示。
+    """按 PRISMA 2020 口径汇总检索流程数字并自检。
 
-    系统评价/Meta 分析投稿时必须附 PRISMA 流程图，而研究者现在的做法是拿 Excel 手工数：
-    检索记录在一处、去重结果在另一处、全文评估在第三处，数一遍半小时，改一次检索式还得重数。
-
-    能自动算的：各数据库识别到的记录数（来自检索日志）、重复移除数。
-    必须人工填的：「题目/摘要排除」「未获取到全文」「最终纳入」——
-    这些是研究者的学术判断，工具只负责把数字做成自洽的、可复现的，
-    并在数字对不上时提前拦住，而不是生成一张看起来很漂亮但会被审稿人质疑的图。
+    各库识别记录数、重复移除数可自动算（来自检索日志）；题目/摘要排除、未获取全文、
+    最终纳入须人工填（学术判断）。工具只保证数字自洽可复现、对不上时提前拦住。
     """
     summary = await asyncio.to_thread(search_log_summary, since=since or None, db=get_db())
     flow = build_prisma_flow(
         identified=summary["by_source"],
-        # 说明：日志里 result_count 是"该源返回条数"，new_count 是"新入库条数"，
-        # 两者之差包含了"重复"与"被合并富化"两种情况。这与 PRISMA 的
-        # "duplicates removed" 语义略有差异（后者只算重复），
-        # 是日志里能拿到的最接近口径；需要严格口径时请按提示手工填入。
+        # 日志口径：返回数-新入库数含"重复"与"合并富化"，与 PRISMA duplicates removed（只算重复）
+        # 语义略有差异，是可得的最接近口径；严格口径需按提示手工填
         duplicates_removed=max(0, summary["total_results"] - summary["total_new"]),
         excluded_at_screening=excluded_screening,
         not_retrieved=not_retrieved,

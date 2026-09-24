@@ -1,33 +1,10 @@
 """迁移执行器：版本表、事务、备份、dry-run、状态查询。
 
-    from medscholar.db.migrate import apply_migrations, migration_status
-
-    apply_migrations(db.conn)        # 幂等；默认先做一份 SQLite 备份
-    migration_status(db.conn)        # 当前版本 / 已应用 / 待应用 / 是否存在失败记录
-
-命令行（不需要起 8760 服务，直接对库文件操作）::
-
-    python -m medscholar.db.migrate --db data/medscholar.db --status
-    python -m medscholar.db.migrate --db data/medscholar.db --plan          # dry-run 计划
-    python -m medscholar.db.migrate --db data/medscholar.db --apply
-    python -m medscholar.db.migrate --db data/medscholar.db --rollback-steps 1
-
-实现上三个不能错的地方：
-
-1. 不能用 ``executescript``：它在执行脚本前会先隐式提交当前事务，
-   "一个迁移一个事务"的保证会被撕开。这里一律用 ``conn.execute("BEGIN")``
-   + 逐条 ``execute`` + 显式 ``COMMIT`` / ``ROLLBACK``。
-2. 连接不能留在事务里：执行器在动手前检查并处理"调用方忘了提交"的情况，
-   结束前保证 ``conn.in_transaction is False``。
-3. 备份不是文件拷贝：WAL 模式下 ``.db`` 文件里可能缺少尚未 checkpoint 的页面，
-   直接 ``shutil.copy`` 会得到打不开的备份。统一用 ``sqlite3.Connection.backup()``。
-
-校验和必须有：``schema_migrations`` 里保存 ``version|name`` 与语句摘要的指纹。
-已发布的迁移被人事后改了语句，不同人机器上的库结构会静默分叉，CI 全绿、代码一致，
-但线上库少了那一列/那个索引。``apply()`` 在动手之前先做比对，默认直接报错。
-
-``MigrationHistory`` 只管版本表（读记录、算状态、算指纹差异），
-``MigrationRunner`` 继承它并负责执行（事务、备份、正反向）。
+CLI：``python -m medscholar.db.migrate --db <path> [--status|--plan|--apply|--rollback-steps N]``。
+三个关键约束：不用 executescript（会隐式提交，破坏一迁移一事务）；备份必须用
+``Connection.backup()``（WAL 下直接 copy 文件会缺页打不开）；已应用迁移的语句
+指纹存入 schema_migrations，改动已发布迁移默认报错，防止库结构静默分叉。
+MigrationHistory 管版本表，MigrationRunner 负责执行。
 """
 
 from __future__ import annotations
@@ -62,19 +39,11 @@ TABLE = "schema_migrations"
 #: 迁移前备份的文件名后缀模板：``<db>.pre-migration-<版本>.bak``
 BACKUP_SUFFIX_TEMPLATE = ".pre-migration-{version}.bak"
 
-#: 存进库里的错误信息上限（字符）。截断是为了不让一条超长 traceback
-#: 把版本表撑成大文本；排查时完整的异常仍会随 MigrationError 抛出。
+#: 错误信息入库上限：完整异常仍随 MigrationError 抛出，这里截断防止版本表膨胀。
 _ERROR_LIMIT = 2000
 
-#: 版本表结构。
-#:
-#: ``version`` 直接做主键：重复登记同一版本在物理上就不可能发生，
-#: 不依赖应用层记得去查重。
-#:
-#: 时间一律用带时区的 ISO8601（UTC）：用户会跨时区/夏令时使用这个应用，
-#: 本地时间字符串在有夏令时的地区会出现两个 02:30，事故时间线直接对不上。
-#: 注意与表内其他列（``datetime('now')`` 生成的 UTC "YYYY-MM-DD HH:MM:SS"）的区别：
-#: 那些是 sqlite 默认格式，这里是迁移框架自己写入的、显式带时区的格式。
+#: version 作主键物理上杜绝重复登记；applied_at 用显式带时区的 UTC ISO8601
+#:（区别于表内其他列 datetime('now') 生成的无时区格式），避免夏令时本地时间歧义。
 SCHEMA_MIGRATIONS_DDL = f"""
 CREATE TABLE IF NOT EXISTS {TABLE} (
     version     INTEGER PRIMARY KEY,
@@ -94,14 +63,8 @@ def _utc_now() -> str:
 
 
 def _is_autocommit(conn: sqlite3.Connection) -> bool:
-    """连接是否处于自动提交模式。
-
-    ``isolation_level is None`` 时 sqlite3 不做隐式事务管理，``BEGIN`` 与
-    ``COMMIT`` 完全由我们控制。
-    默认模式下 sqlite3 会在 DML 前自动开事务，显式 ``BEGIN`` 会撞上
-    "cannot start a transaction within a transaction"，
-    动手前必须处理（见 :meth:`MigrationRunner._prepare_connection`）。
-    """
+    """``isolation_level is None`` 即自动提交：BEGIN/COMMIT 完全由我们控制；
+    默认模式下 sqlite3 会隐式开事务，显式 BEGIN 会报错，动手前必须先处理。"""
     return conn.isolation_level is None
 
 
@@ -110,12 +73,7 @@ class _MigrationFailed(RuntimeError):
 
 
 class MigrationHistory:
-    """``schema_migrations`` 版本表的读写与解读（不做任何迁移执行）。
-
-    独立成类的原因：状态查询必须能在任何连接上安全调用（包括还没建版本表的老库），
-    每条语句都必须是只读或幂等的；执行器会 ``BEGIN``/``ROLLBACK``。
-    分开之后，不会"只想看一眼状态，结果把库改了"。
-    """
+    """``schema_migrations`` 版本表的只读/幂等读写与状态解读，不执行迁移。"""
 
     def __init__(
         self,
@@ -145,11 +103,7 @@ class MigrationHistory:
         return row is not None
 
     def records(self) -> dict[int, sqlite3.Row]:
-        """已登记的行：版本号 → Row（含失败行）。
-
-        表不存在时返回空 dict：``status()`` / ``applied_versions()`` 是只读的，
-        不能因为写错库路径就在库里凭空建出版本表。
-        """
+        """已登记的行：版本号 → Row（含失败行）。表不存在返回空 dict，只读路径不建表。"""
         if not self.table_exists():
             return {}
         rows = self.conn.execute(
@@ -195,13 +149,8 @@ class MigrationHistory:
         return found
 
     def status(self) -> dict[str, Any]:
-        """当前状态快照。
-
-        * ``exists``：版本表是否存在（False = 这个库从未被迁移框架接管）
-        * ``current_version``：已成功应用的最大版本号（没有则为 0）
-        * ``dirty``：版本表里是否留有失败行（上一次迁移中途炸了，
-          库结构可能既不是旧版也不是新版）
-        """
+        """状态快照：exists（版本表是否存在）、current_version、dirty（留有失败行，
+        库结构可能停在新旧之间）、checksum_mismatch、orphan 等。"""
         records = self.records()
         applied = sorted(v for v, row in records.items() if int(row[5]) == 1)
         failed = sorted(v for v, row in records.items() if int(row[5]) != 1)
@@ -238,11 +187,9 @@ class MigrationHistory:
 
 
 class MigrationRunner(MigrationHistory):
-    """按版本号顺序执行迁移，并维护 ``schema_migrations`` 版本表。
+    """按版本号顺序执行迁移并维护版本表。
 
-    参数 ``backup``：是否在 ``apply()`` 真正改动库之前做一份 SQLite 备份。
-    默认开启；``init_database`` 里会显式关掉（那时通常是刚建好的空库，
-    每次启动都复制一遍文件纯属浪费，而空库也没什么可丢的）。
+    backup 默认开启（改动库前做 SQLite 备份）；init_database 对空库显式关闭。
     """
 
     def __init__(
@@ -261,11 +208,7 @@ class MigrationRunner(MigrationHistory):
 
     # ------------------------------------------------------------ 计划
     def plan(self, *, target: int | None = None) -> list[str]:
-        """人类可读的执行计划（dry-run 的输出）。
-
-        待应用为空时返回 ``["无待应用的迁移（当前版本 Mxxxx）"]`` ——
-        空列表会被误读成"命令没生效"，所以这里必须给一句明确的话。
-        """
+        """人类可读的执行计划（dry-run 输出）；无待应用时也返回一句明确提示而非空列表。"""
         todo = self._select(target)
         if not todo:
             return [f"无待应用的迁移（当前版本 M{self.status()['current_version']:04d}）"]
@@ -298,12 +241,8 @@ class MigrationRunner(MigrationHistory):
 
     # ------------------------------------------------------------ 备份
     def backup_to(self, path: str | Path) -> Path:
-        """用 SQLite 的在线备份 API 把当前库备份到 ``path``，返回该路径。
-
-        WAL 模式下最新提交的数据可能还在 ``-wal`` 文件里，只拷 ``.db`` 会得到
-        缺数据甚至打不开的"备份"。``Connection.backup()`` 由 SQLite 保证一致性快照，
-        且不需要关连接。
-        """
+        """用在线备份 API 备份到 path。WAL 下最新数据可能还在 -wal 文件，
+        直接拷 .db 会缺页打不开，``Connection.backup()`` 保证一致性快照且无需关连接。"""
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         destination = sqlite3.connect(str(target))
@@ -315,13 +254,8 @@ class MigrationRunner(MigrationHistory):
         return target
 
     def default_backup_path(self) -> Path | None:
-        """``<db>.pre-migration-<版本>.bak``（与库同目录）。
-
-        同目录是为了让备份和库一起被搬走；放系统临时目录会出现"库在、备份被清理掉"。
-        带版本号而不是时间戳，方便一眼看出这份备份是升级到哪个版本之前的状态。
-
-        内存库（``:memory:``）返回 None。
-        """
+        """``<db>.pre-migration-<版本>.bak``，与库同目录（保证随库一起搬迁）；
+        带版本号可一眼看出备份点；内存库返回 None。"""
         row = self.conn.execute("PRAGMA database_list").fetchone()
         raw = str(row[2]) if row and row[2] else ""
         if not raw:
@@ -359,32 +293,11 @@ class MigrationRunner(MigrationHistory):
         dry_run: bool = False,
         allow_checksum_change: bool = False,
     ) -> dict[str, Any]:
-        """应用迁移。返回结果字典（见下方 Returns）。
+        """应用迁移，返回结果字典（applied/plan/pending/current_version/dry_run/
+        failed/backup；失败不抛异常，failed 带 version/name/error，后续迁移立即停止）。
 
-        ``allow_checksum_change`` 是逃生口：只在确认改动是等价重写、且目标库
-        已是新结构时启用。启用后执行器会记一条 warning 并把新指纹写回版本表。
-        不能用来"让报错消失"：真的加了一列时，跑过旧语句的库不会因为放过校验
-        而补上这一列。
-
-        Returns:
-            成功::
-
-                {
-                  "applied": [{"version", "name", "duration_ms"}, ...],
-                  "plan": ["M0002 …", ...],
-                  "pending": [{"version", "name"}, ...],
-                  "current_version": int,
-                  "dry_run": bool,
-                  "failed": None,
-                  "backup": "<备份文件路径或 None>",
-                }
-
-            失败（不抛异常，失败信息在返回值里）::
-
-                {"applied": [...成功执行的...], "failed": {"version", "name", "error"},
-                 "pending": [...尚未尝试的...], "current_version": int, "backup": ...}
-
-        失败后立即停止后续迁移。
+        allow_checksum_change 仅用于确认等价重写且目标库已是新结构的逃生口：
+        放过校验不会补上实际缺失的列，只会记 warning 并回写新指纹。
         """
         self.last_failure = None
         self.backup_path = None
@@ -485,10 +398,7 @@ class MigrationRunner(MigrationHistory):
         )
 
     def apply_or_raise(self, **kwargs: Any) -> dict[str, Any]:
-        """与 :meth:`apply` 相同，但失败时抛 :class:`MigrationError`。
-
-        CLI 用它，所以命令行的退出码与错误信息是可用的（失败不静默）。
-        """
+        """同 apply()，失败时抛 MigrationError（CLI 用，保证失败不静默、退出码可用）。"""
         result = self.apply(**kwargs)
         if result["failed"] is not None:
             info = result["failed"]
@@ -499,11 +409,8 @@ class MigrationRunner(MigrationHistory):
 
     # ------------------------------------------------------------ 回滚
     def rollback(self, *, steps: int = 1) -> dict[str, Any]:
-        """回滚最近 ``steps`` 个可逆迁移。
-
-        只回滚可逆的：不可逆的直接抛 :class:`MigrationError`，不跳过继续往下滚。
-        跳过会让库停在既非新也非旧的中间态，比明确拒绝更危险。
-        """
+        """回滚最近 steps 个可逆迁移；遇不可逆迁移直接报错而不跳过
+        （跳过会让库停在非新非旧的中间态；不可逆迁移只能用 .bak 备份还原）。"""
         self._prepare_connection()
         mismatches = self.checksum_mismatches()
         if mismatches:
@@ -585,12 +492,8 @@ class MigrationRunner(MigrationHistory):
 
     # ------------------------------------------------------------ 单步执行
     def _run_one(self, item: Migration) -> float:
-        """在一个事务里执行一个迁移，返回耗时（毫秒）。
-
-        失败时：整体 ``ROLLBACK``（部分失败不留半成品）→ 写一条 ``success=0``
-        的失败记录（带错误信息）→ 抛 ``_MigrationFailed``（消息里带
-        version / name / 失败语句 / 原始异常）。
-        """
+        """一个事务执行一个迁移，返回耗时毫秒。失败时整体 ROLLBACK、
+        写 success=0 失败记录后抛 _MigrationFailed（消息带版本/语句/原始异常）。"""
         self._prepare_connection()
         started = perf_counter_ms()
         statement = ""
@@ -630,10 +533,7 @@ class MigrationRunner(MigrationHistory):
     def _record(
         self, item: Migration, duration_ms: float, *, success: bool, error: str
     ) -> None:
-        """写入版本表。成功行的指纹保留，失败行的指纹留空。
-
-        失败意味着这个语句组合没被应用过，留指纹会让人误以为历史里有过这一版。
-        """
+        """写入版本表；成功行写指纹，失败行指纹留空（未应用成功，留指纹会误导历史）。"""
         self.conn.execute(
             f"INSERT INTO {TABLE}"
             "(version, name, checksum, applied_at, duration_ms, success, error) "
@@ -655,19 +555,9 @@ class MigrationRunner(MigrationHistory):
 
     # ------------------------------------------------------------ 连接状态
     def _prepare_connection(self) -> None:
-        """保证连接处于自动提交模式，并且**不在**任何事务里。
-
-        两种真实情况：
-
-        * ``isolation_level is None``（本项目 ``Database`` 用的模式）：
-          只检查有没有遗留事务，有就提交掉；
-        * 默认模式：sqlite3 会在 DML 前偷偷开事务，迁移自己的回滚会撞上
-          "cannot rollback - no transaction is active"，所以先切到自动提交。
-
-        为什么"有遗留事务就提交"而不是回滚：调用方走到这里说明它认为自己
-        已经做完了（典型的 bug 是忘了 commit），把它未完成的工作悄悄撤销
-        会造成更难查的数据丢失；提交则是"按它以为的语义"继续。
-        """
+        """保证连接处于自动提交模式且不在事务里：默认 isolation_level 下先
+        commit 遗留事务再切 None（隐式事务会让迁移自己的 ROLLBACK 报错）。
+        遗留事务选择提交而非回滚：调用方多半是忘了 commit，悄悄撤销其改动更危险。"""
         if not _is_autocommit(self.conn):
             if self.conn.in_transaction:
                 self.conn.commit()
@@ -686,14 +576,10 @@ def apply_migrations(
     allow_checksum_change: bool = False,
     migrations: Sequence[Migration] | None = None,
 ) -> dict[str, Any]:
-    """对给定连接应用迁移（幂等）。
+    """对给定连接应用迁移（幂等），失败抛 MigrationError（迁移失败必须可见）。
 
-    失败时抛 :class:`MigrationError`（消息里带 version / name / 失败语句 /
-    原始异常）—— 迁移失败属于"必须有人知道"的事件，不能只体现在返回值里。
-    调用方若需要"失败也不中断"的语义（``medscholar.db.connect.Database`` 就是这种：
-    应用打不开比库结构落后更糟），自行 ``except MigrationError`` 并告警。
-
-    ``init_database`` 会传 ``backup=False``：启动路径上不该每次都复制一遍库文件。
+    需要"失败不中断启动"语义的调用方（如 Database 构造）自行捕获告警；
+    init_database 传 backup=False，避免每次启动都复制库文件。
     """
     runner = MigrationRunner(connection, migrations=migrations, backup=backup)
     return runner.apply_or_raise(
@@ -712,12 +598,8 @@ def plan_migrations(connection: sqlite3.Connection, *, target: int | None = None
 
 
 def main(argv: list[str] | None = None) -> int:
-    """命令行入口（实现在 :mod:`medscholar.db.migrations.cli`）。
-
-    这里做一次**函数内**转发并把 :class:`MigrationRunner` 注入进去：
-    ``cli`` 不 import ``migrate``，环就不存在（``scripts/check_arch.py`` 会检查），
-    同时 ``python -m medscholar.db.migrate`` 仍然可用。
-    """
+    """命令行入口，函数内转发到 migrations.cli 并注入 MigrationRunner：
+    cli 不反向 import migrate 以避免循环依赖（scripts/check_arch.py 会校验）。"""
     from .migrations.cli import run
 
     return run(argv, runner_factory=MigrationRunner)

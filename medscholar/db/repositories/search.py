@@ -1,14 +1,7 @@
 """检索：FTS5 BM25 关键词召回、向量 KNN 语义召回、RRF 融合与检索日志。
 
-检索质量是这个项目最常被调整的部分（放宽分级、权重、候选规模、RRF 的 k）。
-单独放在一个文件里，调参时不用在一堆课题/会话/产物代码里翻找。
-检索日志也放在这里：它记录每次检索的结果，与检索同生命周期。
-
-检索策略（需求 2.4 节）：
-    1. FTS5 BM25 关键词召回（标题权重最高，MeSH/关键词次之）
-    2. sqlite-vec KNN 语义召回（向量已 L2 归一化，距离与余弦距离单调一致）
-    3. RRF 融合（默认 k=60）
-    4. 元数据过滤（年份 / 期刊 / 被引 / 开放获取 / 课题）
+策略：BM25（标题权重最高）+ sqlite-vec KNN（向量 L2 归一化，距离与余弦单调一致）
+→ RRF 融合（默认 k=60）→ 元数据过滤。
 """
 
 from __future__ import annotations
@@ -44,16 +37,10 @@ def search_fts(
     db: Database | None = None,
     table: str = "papers_fts",
 ) -> list[tuple[int, float]]:
-    """FTS5 BM25 关键词检索。返回 ``[(paper_id, bm25_score), ...]``，分数越小越相关。
+    """FTS5 BM25 检索，返回 [(paper_id, score)]，分数越小越相关。
 
-    中文检索采用逐级放宽策略，单一级别无法同时兼顾精度与召回：
-
-    1. ``phrase`` —— 连续子串精确匹配（精度最高，但「治疗卒中后抑郁」匹配不到
-       「治疗脑卒中后抑郁」）；
-    2. ``bigram`` —— 重叠二元组取 AND（对词序调换、中间插入修饰语更宽容）；
-    3. ``or``     —— 二元组取 OR（召回兜底，靠 BM25 排序压住噪声）。
-
-    任何一级返回非空结果就停止，常见查询仍只跑一次 FTS（毫秒级）。
+    中文逐级放宽，任一级命中即停：phrase 精确短语 → bigram AND（容忍插字/换序）
+    → bigram OR（召回兜底，靠 BM25 压噪声）。
     """
     if not query or not query.strip():
         return []
@@ -312,20 +299,11 @@ def search_log_summary(
     queries: Sequence[str] | None = None,
     db: Database | None = None,
 ) -> dict[str, Any]:
-    """按数据源汇总检索日志：命中数、新增数、失败数、涉及多少条检索式。
+    """按数据源汇总检索日志（命中/新增/失败数、检索式数），供 PRISMA"识别"环节填表。
 
-    用于 PRISMA 流程里的"识别（Identification）"环节：
-    那一步要求写出每个数据库各检索到多少条，这个数字本来就在日志里，
-    不用让研究者拿 Excel 手工数。
-
-    Args:
-        since: ISO 时间下界（``search_logs.created_at`` 是 UTC 的 ``datetime('now')`` 文本）。
-        queries: 只统计这些检索式（一次综述通常固定一组检索式）。
-
-    Note:
-        ``result_count`` 是该源本次返回的条数，同一篇文献被多个源返回会被重复计入：
-        PRISMA 识别阶段统计的就是"检索到的记录数"，去重发生在下一步
-        （``duplicates_removed``）。把这两件事混在一起，会让 PRISMA 数字与流程图对不上。
+    since 为 ISO 时间下界（created_at 是 UTC datetime('now') 文本）；queries 限定检索式。
+    注意 result_count 按源重复计入同一篇文献——PRISMA 识别阶段统计的就是检索记录数，
+    去重发生在下一步，混用会让数字与流程图对不上。
     """
     sql = [
         "SELECT source,",

@@ -30,12 +30,10 @@ __all__ = ["main", "build_parser"]
 
 
 def _setup_stdout() -> None:
-    """Windows 控制台默认 GBK，中文输出会乱码；同时确保实时刷出。
+    """Windows 控制台默认 GBK，中文输出会乱码，统一 reconfigure 为 utf-8 并实时刷出。
 
-    ``line_buffering=True`` 很关键：输出被重定向到文件或管道时（例如
-    ``run.bat > log.txt``），Python 默认是块缓冲，启动横幅要等到进程退出
-    才会出现，看起来像"什么都没打印"。在真实控制台上本来就无缓冲，
-    但显式设置可以避免这类困惑。
+    ``line_buffering=True`` 很关键：重定向到文件/管道时（``run.bat > log.txt``）
+    Python 默认块缓冲，启动横幅要等进程退出才出现，看起来像"什么都没打印"。
     """
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -49,10 +47,10 @@ def _print_json(data: Any) -> None:
 
 
 def _source_badge(status: dict[str, Any]) -> str:
-    """把单个数据源的状态渲染成 ``标签=结果``。
+    """把单个数据源状态渲染成 ``标签=结果``。
 
-    必须区分「跳过」与「失败」—— 离线模式下所有数据源都是跳过，
-    早期版本一律显示成「失败」，会让人误以为网络出了问题。
+    必须区分「跳过」与「失败」：离线模式下所有数据源都是跳过，早期一律显示
+    「失败」，会让人误以为网络出了问题。
     """
     label = status.get("label") or status.get("name") or "?"
     if status.get("skipped"):
@@ -63,12 +61,11 @@ def _source_badge(status: dict[str, Any]) -> str:
 
 
 def _wait_for_port(host: str, port: int, timeout: float = 40.0) -> bool:
-    """轮询直到端口真的开始接受连接。
+    """轮询直到端口真的开始接受连接，再开浏览器。
 
-    不要用固定 sleep 再开浏览器。 早期实现是 ``threading.Timer(1.5, open)``，
-    但 uvicorn 从启动到监听通常要 2~4 秒（要导入模块、初始化数据库与向量表）。
-    浏览器在服务还没监听时就打开，前端首屏的每个请求都会 "Failed to fetch"，
-    用户看到的是满屏"无法连接后端服务"。实测确认过这个时序问题。
+    不要用固定 sleep：早期实现 ``threading.Timer(1.5, open)``，但 uvicorn
+    从启动到监听通常要 2~4 秒（导入模块、初始化数据库与向量表），浏览器提前
+    打开会让首屏每个请求都 Failed to fetch，满屏"无法连接后端服务"（实测时序问题）。
     """
     import socket
     import time
@@ -205,9 +202,8 @@ async def _doctor_async(args: argparse.Namespace) -> int:
                 "      → 云端模式：在 config.yaml 配置 llm.provider=deepseek 与 llm.api_key"
             )
     except (asyncio.TimeoutError, TimeoutError):
-        # 注意：asyncio.TimeoutError 的字符串表示是空串，
-        # 早期实现 f"LLM 探测失败：{exc}" 会输出"LLM 探测失败："后面什么都没有，
-        # 让人完全无法判断发生了什么。
+        # 坑：asyncio.TimeoutError 的 str 是空串，f"LLM 探测失败：{exc}" 会输出
+        # "LLM 探测失败："后面什么都没有，无法判断发生了什么。
         line(cfg.llm.provider, False, "探测超时（60 秒无响应）")
         problems.append(
             "LLM 探测超时（60 秒无响应）。\n"

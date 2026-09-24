@@ -2,20 +2,12 @@
 
 统一入口::
 
-    from medscholar.api import search_all, SearchFilters
+    from medscholar.api import search_all
 
     outcome = await search_all("accelerated rTMS post-stroke depression",
                                sources=["pubmed", "europepmc"], limit=30)
-    for paper in outcome.papers:
-        print(paper.title)
 
-单独使用某个客户端::
-
-    from medscholar.api import EuropePMCClient
-
-    async with EuropePMCClient() as client:
-        papers = await client.search("stroke rehabilitation", limit=10)
-        text = await client.fulltext(papers[0])
+单源客户端（EuropePMCClient/PubMedClient/...）均可 ``async with`` 独立使用。
 """
 
 from __future__ import annotations

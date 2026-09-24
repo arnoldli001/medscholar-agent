@@ -1,18 +1,6 @@
-"""数据库初始化入口（需求文档「指令1：SQLite数据库初始化」的落地实现）。
+"""数据库初始化入口（幂等）。
 
-用法::
-
-    from medscholar.db import init, insert_paper, search_fts, search_vector, hybrid_search
-
-    db = init()                       # 建库建表 + 建 FTS5 + 建 768 维向量表
-    paper_id, created = insert_paper(paper)
-    hits = hybrid_search("加速rTMS 卒中后抑郁", embedding=vec, top_k=20)
-
-命令行::
-
-    python -m medscholar.db.init            # 初始化（幂等）
-    python -m medscholar.db.init --stats    # 查看统计
-    python -m medscholar.db.init --rebuild  # 重建向量表
+命令行：``python -m medscholar.db.init [--stats|--rebuild|--optimize|--vacuum|--reset]``
 """
 
 from __future__ import annotations
@@ -76,12 +64,10 @@ __all__ = [
     "get_db",
     "close_db",
     "vec_backend_name",
-    # 需求文档点名的四个核心函数
     "insert_paper",
     "search_fts",
     "search_vector",
     "hybrid_search",
-    # 其余仓储函数
     "insert_papers",
     "get_paper",
     "get_papers_by_ids",
@@ -125,14 +111,10 @@ __all__ = [
 def init_database(
     db_path: str | Path | None = None, *, config: AppConfig | None = None
 ) -> Database:
-    """初始化（或打开）本地学术数据库。
+    """初始化（或打开）本地学术数据库，幂等不丢数据。
 
-    幂等：重复调用不会丢失数据。会自动创建
-
-    * ``papers`` / ``citations`` / ``search_logs`` / ``projects`` / ``chat_*`` / ``artifacts``
-    * ``papers_fts``（FTS5，标题+摘要+MeSH+关键词，含中文逐字切分）
-    * ``fulltext_fts``（FTS5，开放获取全文）
-    * ``paper_embeddings``（768 维；优先 vec0 虚拟表，否则纯 Python 回退表）
+    建 papers/citations/projects/chat_*/artifacts 等表、papers_fts 与
+    fulltext_fts（FTS5，含中文逐字切分）、paper_embeddings（优先 vec0，否则纯 Python 回退表）。
     """
     cfg = config or get_config()
     cfg.ensure_dirs()
@@ -140,7 +122,6 @@ def init_database(
     return Database(path, config=cfg)
 
 
-#: 需求文档中的简称
 init = init_database
 
 

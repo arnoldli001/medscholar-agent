@@ -1,11 +1,6 @@
-"""Agent 工作流路由：``tags=["Agent"]``（运行 / SSE / 审批 / 续跑 / 历史）+ ``tags=["产物"]``。
+"""Agent 工作流路由：运行 / SSE / 审批 / 取消 / 续跑 / 历史（运行由 agent.runtime 单例驱动）+ 产物读写。
 
-运行本身由 ``medscholar.agent.runtime`` 的进程级单例驱动（见 deps.get_runtime），
-路由只负责把它暴露成 HTTP：启动、推流、审批、取消、查历史、按阶段快照续跑。
-
-历史记录为什么重要：服务重启会清空内存中的运行，而界面仍在等一个永远不会到来的
-草稿；有了数据库里的运行记录与阶段快照，前端才能明确显示"这次运行在综合阶段被中断"
-并给出「继续」按钮。
+DB 中的运行记录与阶段快照让服务重启后仍能展示中断位置并支持续跑。
 """
 
 from __future__ import annotations
@@ -109,11 +104,7 @@ async def agent_cancel(run_id: str) -> dict[str, Any]:
 
 @router.get("/api/agent/runs", tags=["Agent"])
 async def agent_runs(limit: int = Query(20, ge=1, le=200)) -> dict[str, Any]:
-    """运行列表：内存中的实时运行 + 数据库里的历史记录（含被中断的）。
-
-    服务重启会清空内存中的运行，而用户界面仍在等一个永远不会到来的草稿。
-    有了历史，前端就能明确显示"这次运行在综合阶段被中断"。
-    """
+    """运行列表：内存实时运行 + DB 历史（含中断运行）；重启后内存清空，靠历史补全。"""
     live = {r["run_id"]: r for r in get_runtime().list_runs(limit=limit)}
     db = get_db()
     history = await asyncio.to_thread(repo.list_runs, limit=limit, db=db)
@@ -160,11 +151,7 @@ async def agent_runs(limit: int = Query(20, ge=1, le=200)) -> dict[str, Any]:
 
 @router.post("/api/agent/resume/{run_id}", tags=["Agent"])
 async def agent_resume(run_id: str) -> dict[str, Any]:
-    """从阶段快照继续一次被中断的运行。
-
-    只重跑没做完的阶段：已经检索入库的文献、已写好的草稿都会直接复用，
-    不必因为一次断线就从头再来（检索 + 撰写通常要几十分钟）。
-    """
+    """从阶段快照续跑：已入库文献与已写草稿直接复用，不因断线从头再来。"""
     try:
         handle = await get_runtime().resume(run_id)
     except ValueError as exc:

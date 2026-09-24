@@ -1,30 +1,8 @@
-"""检索式解析与跨数据源翻译。
+"""检索式解析与跨数据源翻译：先解析成结构化查询，再按数据源能力翻译。
 
-用户在检索框里写的东西是"自然语言 + 分隔符"，而各学术库的布尔语法各不相同：
-
-====================== ==========================================================
-PubMed                 ``(a AND b) AND (c OR d) NOT e``，支持字段标签如 ``[tiab]``
-Europe PMC             同上，布尔运算符一致
-arXiv                  ``AND`` / ``OR`` / ``ANDNOT`` + 字段前缀 ``ti:`` ``abs:``
-Semantic Scholar       不支持布尔，只能传相关度检索词
-OpenAlex               ``search`` 参数是相关度检索，不支持布尔
-Crossref               ``query.bibliographic`` 同样是相关度检索
-====================== ==========================================================
-
-因此这里先把输入解析成结构化查询，再按数据源能力翻译：
-支持布尔的库拿到完整表达式，只做相关度检索的库拿到"核心词"。
-
-输入语法（与 PubMed / Web of Science 的习惯一致，前端会实时回显解析结果）::
-
-    rTMS 卒中后抑郁                     → AND（空格分隔，最常用）
-    rTMS, 卒中后抑郁                    → AND（逗号也按 AND，符合"多关键词"直觉）
-    rTMS | 经颅磁刺激                    → OR 组
-    rTMS OR 经颅磁刺激                   → 同上（显式写 OR 也行）
-    "post-stroke depression" rTMS       → 短语精确匹配 + AND
-    rTMS -动物实验                       → 排除
-    rTMS NOT 动物实验                    → 同上
-
-任何一项都会被前端展示成"将检索：…"，用户不必记语法。
+布尔能力分两档：pubmed/europepmc/arxiv 支持完整布尔表达式（arXiv 用 ANDNOT）；
+semantic_scholar/openalex/crossref 只做相关度检索，拿全部核心词（同义词全带，排序更准）。
+语法：空格/逗号=AND，| 或 OR=任选，- 或 NOT=排除，"引号"=精确短语；分号=OR（中文并列习惯）。
 """
 
 from __future__ import annotations
@@ -111,12 +89,7 @@ def _strip_quotes(token: str) -> str:
 
 
 def _tokenize(raw: str) -> list[str]:
-    """切分成词元，并把分隔符规范化成显式标记。
-
-    * 空格、`,`、`，`  → AND（直接相邻即可）
-    * `;`、`；`        → OR（插入 ``|`` 标记，符合中文里"并列同义词"的写法）
-    * ``"..."``        → 整体保留，不参与切分
-    """
+    """切分词元：空格/逗号=AND 相邻，分号插入 | 标记（OR），引号整体保留不切。"""
     out: list[str] = []
     for chunk in _TOKEN_RE.findall(raw):
         if chunk.startswith('"'):
@@ -282,7 +255,7 @@ def for_source(query: str | ParsedQuery, source: str) -> str:
         return ""
 
     if source not in BOOLEAN_SOURCES:
-        # 只做相关度检索的数据源：给核心词（OR 组取第一个代表）
+        # 相关度检索数据源：给全部核心词（OR 组同义词全带上，多给词排序更准、不丢召回）
         return parsed.core_text()
 
     units: list[str] = []

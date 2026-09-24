@@ -1,13 +1,9 @@
 """基于用户实验数据生成论文初稿（IMRaD）。
 
-与"综述草稿"的区别：综述是基于文献的总结；这里是基于用户自己的
-实验数据写论文。因此最大的风险不是文风，而是编造数据。
-
-本模块的核心防线是 :func:`check_number_provenance`：
-正文里出现的每一个数字，都必须能在「用户提供的数据/统计结果」或
-「本地知识库的文献证据」里找到出处，否则标记为无法溯源。
-这条检查让"AI 帮你写论文"从不可控变成可审计 —— 医学论文里编一个
-P 值就是学术不端，必须由程序兜住，而不是靠提示词祈祷。
+与"综述草稿"的区别：综述是基于文献的总结，这里基于用户自己的实验数据，
+最大风险不是文风而是编造数据。核心防线是 :func:`check_number_provenance`：
+正文里出现的每个数字都必须能在「用户数据/统计结果」或「本地文献证据」里找到出处，
+否则标记为无法溯源。医学论文里编一个 P 值就是学术不端，必须由程序兜住，而不是靠提示词祈祷。
 """
 
 from __future__ import annotations
@@ -183,8 +179,8 @@ def check_number_provenance(
 ) -> dict[str, Any]:
     """校验正文里每个数字的出处。
 
-    Returns:
-        ``{"total": n, "ok": n, "unverified": [NumberCheck...], "verdict": ...}``
+    返回 ``{"total", "ok", "unverified", "verdict", ...}``；verdict 取
+    ``no_numbers``/``pass``/``warn``/``fail``，无法溯源占比很小时为 warn。
     """
     allowed_source = " ".join([brief.text_for_prompt(), brief.results, brief.data])
     allowed_literature = literature_text or ""

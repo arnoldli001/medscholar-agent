@@ -1,34 +1,19 @@
 """带版本号的提示词注册表（platform 层，只依赖标准库）。
 
-原先所有提示词都是 ``medscholar/llm/prompts.py`` 里的模块级字符串常量，
-模型输出变差时没法回答"这次跑的是哪一版"（历史只留在 git，git 不进 trace）；
-想做 A/B 也只能改代码再跑，两版无法同进程共存；还有一部分提示词散落在
-各 agent 的内联字符串里。版本号的成本是一个整数加一句中文说明，换来的是
-日志、trace、``/api/metrics`` 都能带上 ``key@version[variant]``。
-
-不用模板引擎（jinja2 等）：提示词要被逐字审阅，一句"只输出 JSON，不要解释"
-删掉半句模型行为就漂移。模板层会把正文拆成继承、include、过滤器等间接层，
-静态阅读要先脑内渲染两层。这里只用受限的 ``str.replace`` 语义。
-
-占位符只处理声明过的名字。不能用 :meth:`str.format`：提示词里合法存在
-花括号（示范 JSON 输出的 ``{"queries": [...]}``），format 会把它们当占位符；
-反过来，多写一个没被替换的 ``{xxx}`` 会静默进入模型上下文，模型把它当正文
-照着编。所以只对 ``placeholders`` 显式声明过的名字做替换与检查，其余花括号
-一律当普通字符：
+版本化让日志、trace、``/api/metrics`` 都能带上 ``key@version[variant]``，
+回答"这次跑的是哪一版"，并支持两版同进程共存的 A/B；成本只是一个整数加一句中文说明。
+不用模板引擎（jinja2 等）：提示词要逐字审阅，继承/include/过滤器会让静态阅读
+先脑内渲染两层。占位符用受限替换而不是 :meth:`str.format`：正文里合法存在示范 JSON
+的花括号（``{"queries": [...]}``），而漏替换的 ``{xxx}`` 会静默进模型上下文被当正文照编：
 
 * 声明了却没传值 → 抛 :class:`PromptError`；
-* 声明了但正文里不存在这个 ``{name}`` → 注册时就报错；
+* 声明了但正文里没有该 ``{name}`` → 注册时就报错；
 * 没声明的花括号（JSON 示例）→ 完全不动，也不误报。
 
-:meth:`PromptRegistry.undeclared_placeholders` 用来审计"看起来像占位符、
-却没人声明"的 token（只识别 ``{标识符}`` 形态，JSON 示例天然不会命中）。
-
-与 prompt_library 的分工：本模块是机制（注册、选版、渲染、统计），
-具体文本在 :mod:`medscholar.platform.prompt_library` 里登记。
-装配方向是 ``prompt_library → prompts``，本模块不能反向 import 它——
-互相 import 会被 ``scripts/check_arch.py`` 的循环依赖检查抓出来。
-所以这里提供 :func:`register_library_loader` 注册装配函数，
-:func:`reset_registry` 靠它把注册表重建回刚 import 完的状态。
+:meth:`PromptRegistry.undeclared_placeholders` 审计"像占位符却没人声明"的 token。
+与 prompt_library 分工：本模块是机制（注册/选版/渲染/统计），文本在该库登记；
+装配方向 ``prompt_library → prompts``，反向 import 成环（check_arch 会拦），
+故用 :func:`register_library_loader` 回调装配，:func:`reset_registry` 靠它重建。
 """
 
 from __future__ import annotations
@@ -54,10 +39,8 @@ __all__ = [
     "reset_registry",
 ]
 
-#: 提示词类别的受控词表，取 key 的第一段（``writer.section`` 的类别是 ``writer``）。
-#: 受控的原因：key 是唯一标识，一旦出现 ``writer.section`` / ``writing.section``
-#: 这种同义并存，注册表就退化成一堆字符串，A/B 与统计都无从下手。
-#: 新增类别时先在这里登记（``register`` 会拒绝词表外的类别）。
+#: key 第一段类别的受控词表（``writer.section`` → ``writer``）。同义并存
+#: （writer/writing）会让注册表退化成字符串堆；新增类别先在此登记，register 拒绝词表外类别。
 PROMPT_KINDS: tuple[str, ...] = (
     "core",  # 角色设定、硬性规则等被多处复用的片段
     "system",  # 通用系统提示词（保留给尚未归类的场景）
@@ -74,40 +57,27 @@ PROMPT_KINDS: tuple[str, ...] = (
     "faithfulness",  # 引用忠实度核查
 )
 
-#: ``{name}`` 形态的占位符 token。
-#: 只匹配标识符（字母/下划线开头）：JSON 示例里的 ``{"queries": []}``
-#: 花括号后面紧跟的是引号，永远不会被当成占位符。这条正则同时服务于
-#: 注册期校验与 :meth:`PromptRegistry.undeclared_placeholders`。
+#: ``{标识符}`` 占位符 token（字母/下划线开头）：JSON 示例里花括号后紧跟引号，永不命中。
+#: 同一条正则服务注册期校验与 :meth:`PromptRegistry.undeclared_placeholders`。
 _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 class PromptError(ValueError):
-    """提示词注册表的使用错误（未知 key、缺占位符、重复版本……）。
+    """提示词注册表的使用错误（未知 key、缺占位符、重复版本等），继承 :class:`ValueError`。
 
-    继承 :class:`ValueError` 而不是自定义基类：调用方已经习惯把 ``ValueError``
-    当"输入不对"处理，多一层自定义异常层次只会增加导入。
-    消息一律用中文写清楚"哪里错了、怎么修"——这类错误最终是给深夜排障的人看的。
+    不另立异常层次（调用方已习惯按 ValueError 处理"输入不对"）；
+    消息一律用中文写清"哪里错了、怎么修"——最终是给深夜排障的人看的。
     """
 
 
 @dataclass(frozen=True)
 class PromptVersion:
-    """提示词的一个不可变版本。
+    """提示词的一个不可变版本。登记后不再改写，要改就登新版本号——
+    v2 若能覆盖 v1，历史 trace 里的 ``writer.section@1`` 就对不上当时的文本。
 
-    版本一旦登记就不再改写：要改提示词就登记新版本号。这是可追溯的前提——
-    如果 v2 可以覆盖 v1，历史 trace 里的 ``writer.section@1`` 就再也对不上
-    当时的文本了。
-
-    :param key: 唯一标识，形如 ``writer.section``（类别见 :data:`PROMPT_KINDS`）。
-    :param version: 版本号，从 1 开始递增。
-    :param text: 提示词正文，可含 ``{name}`` 占位符。
-    :param description: 中文说明：这一版改了什么、为什么改。
-        它不是注释而是数据——会被 :func:`prompt_metadata` 带进 trace 与 ``/api/metrics``。
-    :param tags: 标签，例如 ``("system", "citation-strict")``，便于按主题筛选。
-    :param placeholders: 声明本版需要的占位符名（不带花括号）。
-        声明是"必须传值"的承诺，也是"只替换这些"的边界。
-    :param deprecated: 已弃用标记。取用时不指定版本会优先挑最高未弃用版本；
-        全部弃用时退回最高版本，并在 :meth:`PromptRegistry.describe` 里标出来。
+    ``description`` 是数据不是注释，会被 :func:`prompt_metadata` 带进 trace 与 metrics；
+    ``placeholders`` 既是"必须传值"的承诺，也是"只替换这些"的边界；
+    ``deprecated`` 取用时优先选最高未弃用版本，全弃用则退回最高版本并在 describe 标出。
     """
 
     key: str
@@ -121,12 +91,10 @@ class PromptVersion:
 
 @dataclass(frozen=True)
 class Prompt:
-    """一次取用的结果：已渲染好的文本 + 它的版本坐标。
+    """一次取用的结果：已渲染好的文本 + 版本坐标。
 
-    ``text`` 已经是最终文本，因此 ``str(prompt)`` 就能直接当字符串用
-    （``system=get_prompt("writer.system")`` 这种写法不必改调用方代码）。
-    ``version`` / ``variant`` 是给 trace 用的坐标：模型输出变差时，
-    先看这两个值就知道当时用的是哪一版。
+    ``str(prompt)`` 即最终文本，既有调用点无需改动；``version``/``variant``
+    供 trace 使用，输出变差时先看坐标即可知道当时跑的是哪一版。
     """
 
     key: str
@@ -146,18 +114,11 @@ def _kind_of(key: str) -> str:
 def _ensure_library_loaded() -> None:
     """首次取用时确保提示词库已完成注册。
 
-    注册方向是 ``prompt_library → prompts``（避免循环 import），所以只导入本模块
-    时注册表是空的。而空注册表不会报错——只会让 :meth:`describe` 返回 ``{}``、
-    :meth:`metadata` 抛"未知 key"，表现为"指标面板显示 0 条提示词"，最难定位。
-    所以在所有查询入口都加一道自加载。
-
-    两个实现细节都是踩出来的：
-
-    * 判空必须读内部状态（:meth:`PromptRegistry.is_empty`），不能调 ``keys()`` ——
-      ``keys()`` 自己就带守卫，守卫调守卫直接把栈打爆
-      （实测 `RecursionError: maximum recursion depth exceeded`）。
-    * 用 ``_LOADING`` 标志做重入保护：加载过程中若又有人问注册表，
-      必须立刻返回而不是再触发一次 import。
+    注册方向是 ``prompt_library → prompts``，只导入本模块时注册表为空；而空注册表
+    不报错，只表现为面板 0 条提示词/未知 key，最难定位，故所有查询入口加自加载。
+    两个坑：判空必须读 :meth:`PromptRegistry.is_empty` 不能调 ``keys()``——
+    守卫调守卫会递归打爆栈（RecursionError）；``_LIBRARY_LOADING`` 做重入保护，
+    加载中再被问必须立刻返回，不再触发 import。
     """
     global _LIBRARY_LOADING
     if _LIBRARY_LOADING or not REGISTRY.is_empty():
@@ -178,10 +139,8 @@ _LIBRARY_LOADING = False
 class PromptRegistry:
     """提示词注册表：登记、选版、渲染与用量统计。
 
-    数据结构是一棵朴素的三层字典：``key → variant → version → PromptVersion``。
-    变体与版本是两个正交的轴——同一条 ``writer.section`` 可以同时存在
-    "default 变体 v1"、"default 变体 v2（更严格）"和 "citation-strict 变体 v1"，
-    不会互相覆盖。A/B 只需要切变体，不必复制整条 key。
+    三层字典 ``key → variant → version → PromptVersion``。变体与版本是正交的轴：
+    default 的 v1/v2 与 citation-strict 的 v1 可共存而不互相覆盖，A/B 只切变体不必复制 key。
     """
 
     def __init__(self) -> None:
@@ -193,11 +152,10 @@ class PromptRegistry:
 
     # ------------------------------------------------------------- 登记
     def register(self, prompt: PromptVersion, *, variant: str = "default") -> None:
-        """登记一个提示词版本。参数不合法时抛 :class:`PromptError`。
+        """登记一个提示词版本，参数不合法抛 :class:`PromptError`。
 
-        校验刻意做得啰嗦：注册表的失效方式不是崩溃，而是静默走偏（少传一个占位符、
-        声明写错名字、同义 key 并存），所以错误必须在登记期就炸出来，
-        而不是等模型产出一篇格式崩坏的文章。
+        校验刻意严格：注册表的失效方式不是崩溃而是静默走偏（漏占位符、声明名写错、
+        同义 key 并存），错误必须在登记期炸出来，而不是等模型产出格式崩坏的文章。
         """
         if not isinstance(prompt, PromptVersion):
             raise PromptError(
@@ -295,9 +253,8 @@ class PromptRegistry:
     def set_variant(self, key: str, variant: str) -> None:
         """进程内切换某条提示词的变体（A/B 开关）。
 
-        传 ``"default"`` 表示取消 A/B，回到默认变体（不是切换到名为 default 的旁路），
-        这样开关不会在 :meth:`describe` / :meth:`usage` 里留下痕迹。
-        变体不存在时直接报错而不是静默退回默认——静默退回会让 A/B 实验结果无法解释。
+        传 ``"default"`` 取消 A/B，开关不在 describe/usage 留痕；变体不存在直接报错
+        而不是静默退回默认，否则 A/B 实验结果无法解释。
         """
         known = self._entry(key)
         if variant not in known:
@@ -318,22 +275,12 @@ class PromptRegistry:
         variant: str = "default",
         **variables: Any,
     ) -> Prompt:
-        """取用并渲染提示词。
+        """取用并渲染提示词；未知 key / 未知版本 / 缺占位符抛 :class:`PromptError`。
 
-        :param version: ``None`` 表示"该 key 的最高未弃用版本"；全部弃用时
-            退回最高版本（并在 :meth:`describe` 里标出 deprecated），
-            这样线上不会因为一次弃用标记就突然取不到提示词。
-        :param variant: ``"default"``（默认值）表示当前生效的变体——
-            没切过就是名为 default 的那一版，切过（:meth:`set_variant`）就是切过去的那一版。
-            A/B 开关靠这个生效：调用点不必知道自己被做了实验。
-            传具体变体名（例如 ``"citation-strict"``）则是显式指定，与开关无关；
-            想显式回到默认版，先 :meth:`set_variant` 回 ``"default"``。
-        :param variables: 占位符取值。多余的变量会被忽略——一个调用点
-            （例如 writer 写章节）要能同时喂默认版与 citation-strict 变体，
-            而两者声明的占位符未必完全一致。
-
-        未知 key / 未知版本 / 缺占位符都会抛 :class:`PromptError`，
-        错误消息里带 key 名、可用 key 的建议与缺失清单。
+        ``version=None`` 选最高未弃用版本，全弃用时退回最高版本（避免一次弃用标记
+        让线上突然取不到）。``variant="default"``（默认）表示跟随 :meth:`set_variant`
+        的 A/B 开关，调用点无需感知；传具体变体名则是显式指定，与开关无关。
+        多余的 variables 一律忽略：同一调用点可能要喂占位符不完全一致的两个变体。
         """
         _ensure_library_loaded()
         resolved_variant, item = self._resolve(key, version=version, variant=variant)
@@ -356,11 +303,9 @@ class PromptRegistry:
     def metadata(
         self, key: str, *, version: int | None = None, variant: str = "default"
     ) -> dict[str, Any]:
-        """该 key 当前取用坐标的元信息（供 trace / ``/api/metrics`` 记录）。
+        """当前取用坐标的元信息（供 trace / ``/api/metrics``）。
 
-        不渲染，因此不需要占位符取值——埋点代码不必先凑齐变量才能记账。
-        ``tags`` / ``placeholders`` 用 list 而不是 tuple：这份字典会直接进 JSON，
-        list 与 dataclass 里的 tuple 在序列化上等价，但读起来更符合 JSON 的形状。
+        不渲染，埋点代码不必先凑齐占位符变量；tags/placeholders 用 list 输出以贴合 JSON 形状。
         """
         _ensure_library_loaded()
         resolved_variant, item = self._resolve(key, version=version, variant=variant)
@@ -379,10 +324,8 @@ class PromptRegistry:
     ) -> tuple[str, ...]:
         """审计：正文里"看起来像占位符、却没有声明"的 token。
 
-        只识别 ``{标识符}`` 形态，所以 JSON 示例（``{"queries": []}``）不会命中。
-        返回值非空不代表一定是 bug（可能是刻意示范 JSON 片段），
-        但它是"漏替换的 ``{xxx}`` 静默进入模型上下文"的唯一入口，
-        值得在测试里对全部 key 断言一遍。
+        只识别 ``{标识符}``，JSON 示例不会命中。返回值非空不一定是 bug（可能刻意示范 JSON），
+        但它是漏替换的 ``{xxx}`` 静默进入模型上下文的唯一入口，建议测试对全部 key 断言。
         """
         _, item = self._resolve(key, version=version, variant=variant)
         declared = set(item.placeholders)
@@ -392,8 +335,8 @@ class PromptRegistry:
     def describe(self) -> dict[str, dict[str, Any]]:
         """全局概览：``{key: {versions, variants, current, deprecated}}``。
 
-        ``current`` 与 :meth:`get` 的选择规则完全一致（最高未弃用→否则最高），
-        ``deprecated`` 表示"当前变体下已无可用版本，只能取到弃用版本"。
+        ``current`` 的选择规则与 :meth:`get` 一致（最高未弃用→否则最高）；
+        ``deprecated`` 表示当前变体下已无未弃用版本、只能取到弃用版本。
         """
         _ensure_library_loaded()
         out: dict[str, dict[str, Any]] = {}
@@ -412,11 +355,10 @@ class PromptRegistry:
         return out
 
     def usage(self) -> dict[str, int]:
-        """进程内取用计数（:meth:`get` 每成功一次 +1，:meth:`render` 也走 get 同样 +1）。
+        """进程内取用计数（:meth:`get`/:meth:`render` 每成功一次 +1）。
 
-        包含所有已登记的 key（没用过记 0）：``/api/metrics`` 需要一张稳定的表，
-        缺行会让面板上的曲线"忽隐忽现"。计数是进程内的，重启即归零——
-        它不是审计账本，只是"这一版提示词最近有没有被真的用到"。
+        包含所有已登记 key（没用过记 0），保证 ``/api/metrics`` 曲线稳定不缺行；
+        计数重启即归零，它不是审计账本，只反映这一版最近有没有被真的用到。
         """
         return {key: self._usage.get(key, 0) for key in self.keys()}
 
@@ -440,10 +382,10 @@ class PromptRegistry:
             raise self._unknown_key(key) from None
 
     def _unknown_key(self, key: str) -> PromptError:
-        """构造可读的"未知 key"错误：包含 key 名、相似建议与可用 key 清单。
+        """构造可读的"未知 key"错误。
 
-        拼写错误（``writer.sectoin``）是最常见的调用事故，difflib 的建议比
-        "KeyError: 'writer.sectoin'" 有用得多；列全量 key 则省掉一次 grep。
+        拼写错误（``writer.sectoin``）是最常见调用事故，difflib 的相似建议
+        （cutoff 0.5，最多 3 个）比裸 KeyError 有用；并附全量 key 清单省一次 grep。
         """
         available = self.keys()
         close = difflib.get_close_matches(str(key), available, n=3, cutoff=0.5)
@@ -515,9 +457,7 @@ class PromptRegistry:
                 f"渲染 {item.key} v{item.version} 后，占位符 {'、'.join(unused)} 一次都没被替换："
                 "正文与 placeholders 声明不一致，请检查登记内容是否被改写。"
             )
-        # 第二道检查：渲染结果里不应再有声明过的占位符残留。
-        # 替换值与替换都做完了还残留，只可能是"某个变量的取值里正好含 {名字}"，
-        # 消息里点明这一点，省掉一轮排查。
+        # 第二道检查：替换后仍残留声明过的占位符，只可能是变量取值本身含 {名字}。
         leftover = [name for name in item.placeholders if "{" + name + "}" in rendered]
         if leftover:
             raise PromptError(
@@ -528,22 +468,18 @@ class PromptRegistry:
         return rendered
 
 
-#: 全局注册表。内建提示词由 :mod:`medscholar.platform.prompt_library` 在 import 时装配
-#: （见模块 docstring：本模块不能反向 import 它，否则成环）。
+#: 全局注册表。内建提示词由 prompt_library 在 import 时装配（本模块不能反向 import，否则成环）。
 REGISTRY = PromptRegistry()
 
-#: 内建提示词的装配函数。注册进来是为了让 :func:`reset_registry` 能把注册表
-#: 重建回"刚 import 完"的状态，而不是清空后取不到任何提示词。
+#: 内建装配函数清单，供 :func:`reset_registry` 清空后重装回"刚 import 完"状态。
 _LIBRARY_LOADERS: list[Callable[[PromptRegistry], None]] = []
 
 
 def register_library_loader(loader: Callable[[PromptRegistry], None]) -> None:
     """注册一个"往注册表里装内建提示词"的函数（供 prompt_library 调用）。
 
-    用回调而不是 import：prompt_library 依赖本模块的类定义，本模块若再 import 它，
-    模块级依赖就成环了。回调让依赖保持单向，代价是"装配时机"从 import 变成了显式动作
-    （表现在 :func:`reset_registry` 里）。
-    重复注册同一个函数对象是幂等的（模块被重新 import 时不会装两遍）。
+    用回调而不是 import，保持模块依赖单向不成环；重复注册同一函数对象幂等
+    （模块被重新 import 时不会装两遍）。
     """
     if not callable(loader):
         raise PromptError(f"装配函数必须可调用，收到 {type(loader).__name__}")
@@ -552,10 +488,10 @@ def register_library_loader(loader: Callable[[PromptRegistry], None]) -> None:
 
 
 def reset_registry() -> None:
-    """把全局注册表恢复成"刚 import 完 prompt_library"的状态（测试用）。
+    """恢复成"刚 import 完 prompt_library"的状态（测试用）。
 
-    顺序很重要：先清空再重装，因此测试里临时登记的 key、切过的 A/B 变体与计数
-    都会被抹掉，不会串到下一个用例——全局可变状态最容易制造"单独跑绿、一起跑红"。
+    顺序必须是先清空再重装：临时 key、切过的 A/B 变体与计数都会被抹掉，
+    不串到下一个用例——全局可变状态最容易制造"单独跑绿、一起跑红"。
     """
     REGISTRY.clear()
     for loader in _LIBRARY_LOADERS:
@@ -574,10 +510,9 @@ def get_prompt(
 
 
 def prompt_text(key: str, **variables: Any) -> str:
-    """最常用的入口：直接拿渲染好的提示词文本。
+    """最常用入口：直接拿渲染好的文本。
 
-    签名刻意保持"只有变量"：调用点读起来就是 ``prompt_text("chat.user.tail")``，
-    不需要知道版本与变体的存在——版本选择是运维手段，不该污染业务代码。
+    签名刻意只有变量：版本选择是运维手段，调用点不必知道版本/变体的存在。
     """
     return REGISTRY.render(key, **variables)
 

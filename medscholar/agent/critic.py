@@ -1,10 +1,7 @@
-"""Critic Agent：批判性评估（需求 3.1）。
+"""Critic Agent：评估文献方法学质量、证据等级与课题相关性，决定哪些纳入综述。
 
-评估文献的方法学质量、证据等级与课题相关性，决定哪些写进综述。
-两条互补路径：先用启发式规则打分（出版类型、摘要里的研究设计关键词、
-样本量、被引次数、时效性，完全离线、可解释、不会幻觉）；再让 LLM
-逐篇点评核心发现与局限。LLM 不可用或输出不合法时自动回退到启发式结果，
-本节点永不失败。
+启发式规则打分（离线、可解释、不会幻觉）与 LLM 逐篇点评两条路径互补；
+LLM 不可用或输出非法时回退启发式结果，本节点永不失败。
 """
 
 from __future__ import annotations
@@ -153,7 +150,6 @@ def _relevance_score(paper: Paper, topic_terms: set[str]) -> float:
 
     coverage = min(1.0, (title_hits * 2.0 + abstract_hits * 1.0) / (len(topic_terms) * 2.0))
     score = RELEVANCE_BASE + coverage * RELEVANCE_RANGE
-    # 主题词命中是强信号
     if title_hits and coverage >= 0.5:
         score = min(SCORE_MAX, score + RELEVANCE_BONUS)
     return round(max(0.0, min(SCORE_MAX, score)), 1)
@@ -169,7 +165,6 @@ def heuristic_assessment(
     level = detect_evidence_level(paper)
     quality = _design_score(level)
 
-    # --- 样本量：大样本加分，过小减分
     sample = extract_sample_size(paper)
     if sample is not None:
         if sample >= SAMPLE_SIZE_LARGE:
@@ -192,7 +187,6 @@ def heuristic_assessment(
     elif cited == 0:
         quality += QUALITY_PENALTY_NO_CITATION
 
-    # --- 时效性
     if paper.pub_year:
         age = current_year - paper.pub_year
         if age <= AGE_RECENT:
@@ -200,7 +194,6 @@ def heuristic_assessment(
         elif age >= AGE_OLD:
             quality += QUALITY_PENALTY_OLD
 
-    # --- 完整度：没有摘要的文献难以评估
     if not (paper.abstract or "").strip():
         quality += QUALITY_PENALTY_NO_ABSTRACT
 
@@ -270,21 +263,16 @@ class CriticAgent:
         emit: Emitter | None = None,
         use_llm: bool = True,
     ) -> CritiqueResult:
-        """评估全部候选文献。
-
-        Args:
-            entries: ``[(引用编号, Paper), ...]``
-        """
+        """评估全部候选文献，``entries`` 为 ``[(引用编号, Paper), ...]``。"""
         index_to_paper = {index: paper for index, paper in entries}
         result = CritiqueResult()
 
-        # ---- 1) 启发式基线（总是先算，作为回退结果）
+        # 启发式基线总是先算，作为 LLM 失败时的回退结果
         heuristic = {
             index: heuristic_assessment(paper, topic=topic, index=index)
             for index, paper in entries
         }
 
-        # ---- 2) LLM 精评
         if use_llm and entries and not self.config.offline:
             try:
                 llm_assessments = await self._llm_assess(topic, entries, index_to_paper)
@@ -302,7 +290,7 @@ class CriticAgent:
 
             if llm_assessments:
                 result.used_llm = True
-                # LLM 给相关性/结论，启发式守住质量分（避免小模型乱给高分）
+                # LLM 给相关性与结论，启发式守住质量分，避免小模型乱给高分
                 for index, base in heuristic.items():
                     llm_item = llm_assessments.get(index)
                     if llm_item is None:
@@ -327,7 +315,6 @@ class CriticAgent:
         if not result.assessments:
             return result
 
-        # ---- 3) 整体证据质量
         usable = [a for a in result.assessments if a.use_in_review]
         avg_quality = sum(a.quality for a in usable) / len(usable) if usable else 0.0
         rct_like = sum(
@@ -353,11 +340,10 @@ class CriticAgent:
         entries: Sequence[tuple[int, Paper]],
         index_to_paper: dict[int, Paper],
     ) -> dict[int, PaperAssessment]:
-        """让 LLM 逐篇点评，但限制篇数。
+        """让 LLM 只点评启发式得分最高的若干篇。
 
-        本地 8B 模型在纯 CPU 上约 7 tokens/s，逐篇点评 25 篇需要生成上千 token、
-        耗时数分钟。只把启发式得分最高的若干篇交给 LLM，其余文献仍由离线
-        启发式给出完整评估，两者在 :meth:`assess` 中等权融合。
+        本地 8B 纯 CPU 约 7 tokens/s，逐篇点评 25 篇耗时数分钟；
+        其余文献由离线启发式评估，两者在 :meth:`assess` 中等权融合。
         """
         limit = min(len(entries), max(4, self.config.agent.critique_max_papers))
         if len(entries) > limit:

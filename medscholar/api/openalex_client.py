@@ -1,10 +1,7 @@
-"""OpenAlex 客户端。
+"""OpenAlex 客户端（/works，免费）。
 
-OpenAlex 覆盖 2.5 亿+ 学术记录，元数据质量高、完全免费。
-
-* ``/works`` 支持 ``search`` 全文检索与丰富的 ``filter`` 语法
-* 摘要以 ``abstract_inverted_index`` 倒排形式返回，需要还原成文本
-* 带上 ``mailto`` 即进入 polite pool，速率与稳定性更好（配置 ``sources.openalex.email``）
+两个格式要点：摘要以 abstract_inverted_index 倒排索引返回，需 reconstruct_abstract
+还原；带 mailto 进入 polite pool。search 是相关度检索，不支持布尔语法。
 """
 
 from __future__ import annotations

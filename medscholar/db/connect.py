@@ -1,11 +1,7 @@
 """SQLite 连接管理与 schema 初始化。
 
-* ``sqlite_vec.load(conn)`` 不会自行开启扩展加载权限，必须先调用
-  ``conn.enable_load_extension(True)``，否则报 ``OperationalError: not authorized``。
-* ``sqlite_vec.loadable_path()`` 返回的是不带 ``.dll`` 后缀的路径，Windows 下
-  SQLite 会自动补后缀。
-* 扩展无法加载（缺 VC 运行库 / 架构不符 / Python 自带的 SQLite 未启用扩展）时，
-  自动退化为纯 Python 向量检索，功能不受影响，只是规模上限降低。
+载入 sqlite-vec 前必须先 ``enable_load_extension(True)``；扩展加载失败时
+自动退化为纯 Python 向量检索，功能不变、规模上限降低。
 """
 
 from __future__ import annotations
@@ -156,18 +152,11 @@ class Database:
         self._set_meta("schema_version", SCHEMA_VERSION)
 
     def _bootstrap_migrations(self) -> None:
-        """建表之后跑一遍 schema 迁移，并把版本历史对齐到 ``schema_migrations``。
+        """建表后执行 schema 迁移（启动路径不备份）。
 
-        ``schema.sql`` 用 ``CREATE TABLE IF NOT EXISTS`` 描述当前结构，对已有
-        数据的库无害；迁移负责老库的索引/列补齐，按版本有序执行、可重复、可回滚。
-
-        这里不做迁移前备份：启动路径上每次打开库都复制文件是纯浪费，真正会改动
-        结构的迁移由 ``python -m medscholar.db.migrate --apply`` 执行，那条路径
-        默认备份。
-
-        迁移失败只告警、不抛异常：这个方法在 ``Database()`` 构造里，抛异常等于
-        整个应用打不开。这里记录 WARNING + 在 ``schema_migrations`` 里留下
-        ``success=0`` 的失败行，让问题可见、可排查、可重试。
+        失败只告警不抛异常（本方法在构造函数中，抛出会导致整个应用打不开），
+        失败行会留在 ``schema_migrations``（success=0）；有数据的库对
+        "已发布迁移被改动" 放行，空库仍严格校验。
         """
         from .migrate import MigrationError, apply_migrations
 
@@ -285,13 +274,9 @@ class Database:
         self._set_meta(key, value)
 
     def sync_embedding_dim(self, dim: int) -> bool:
-        """把向量表维度对齐到嵌入模型的**实际**维度。
+        """把向量表维度对齐到嵌入模型的实际维度，不一致则重建（原文/元数据不受影响）。
 
-        用户换嵌入模型时不必手工删表：探测到实际维度与配置不一致时，
-        这里会重建向量表，下次检索自动重新嵌入（原文与元数据不受影响）。
-
-        Returns:
-            是否发生了重建（即维度确实变了）。
+        Returns: 是否发生了重建。
         """
         dim = int(dim)
         changed = int(self.config.embedding.dim) != dim

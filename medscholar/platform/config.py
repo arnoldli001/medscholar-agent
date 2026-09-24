@@ -1,11 +1,8 @@
 """配置加载。
 
-优先级（后者覆盖前者）：
-    内置默认值  <  ``config.yaml``  <  环境变量 / ``.env``
-
-数据目录（数据库、全文、导出物）默认落在**项目目录下的 data/**，
-这样整包解压后拷给朋友即可使用；若本包是被 ``pip install`` 到 site-packages 的，
-则自动退回到 ``~/.medscholar``。可用 ``MEDSCHOLAR_HOME`` 显式指定。
+优先级：内置默认值 < ``config.yaml`` < 环境变量 / ``.env``。
+数据目录默认在项目目录 ``data/``（pip 安装到 site-packages 时退回 ``~/.medscholar``），
+可用 ``MEDSCHOLAR_HOME`` 显式指定。
 """
 
 from __future__ import annotations
@@ -33,21 +30,13 @@ DEFAULT_CONFIG_FILENAME = "config.yaml"
 
 
 # --------------------------------------------------------------------- 路径
-#: 源码/解压包根目录的"标记文件"：有这个文件就说明这一层是项目根。
-#: 用标记而不是写死 `Path(__file__).parent.parent`，是因为层级会随重构变化：
-#: 这个模块从 `medscholar/config.py` 搬到 `medscholar/platform/config.py` 之后，
-#: 写死的 `.parent.parent` 就少了一层——源码树判定失败 → `data_home()` 悄悄退回到
-#: `~/.medscholar` → 用户打开应用看到"知识库中还没有文献"（真实事故：仓库里的 587 篇
-#: 文献读不到了，而且没有任何报错）。
+#: 项目根的标记文件：从本文件向上找标记，而非写死 .parent.parent 层数；
+#: 模块挪动层级后写死层数会静默判定失败、退回 ~/.medscholar，导致读不到库内数据。
 ROOT_MARKERS: tuple[str, ...] = ("pyproject.toml", "run.bat", "config.example.yaml")
 
 
 def project_root() -> Path:
-    """返回项目根目录（源码/解压包目录）。
-
-    实现是**从本文件向上找标记文件**，而不是数固定的层数：
-    这样以后再挪动模块位置也不会静默失效。找不到标记时退回"上两级"的历史行为。
-    """
+    """返回项目根目录：向上查找 :data:`ROOT_MARKERS`，找不到时退回上两级。"""
     here = Path(__file__).resolve()
     for candidate in (here.parent, *here.parents):
         if any((candidate / marker).exists() for marker in ROOT_MARKERS):
@@ -128,8 +117,7 @@ class SourcesSettings(BaseModel):
     cnki: SourceSettings = Field(
         default_factory=lambda: SourceSettings(enabled=False, rps=0.2, page_size=20, max_results=40)
     )
-    #: Unpaywall：不参与关键词检索，只在取全文时按 DOI 查合法 OA 副本。
-    #: 必须填 email（免费，Unpaywall 用它识别调用方）。
+    #: Unpaywall：不参与关键词检索，只在取全文时按 DOI 查合法 OA 副本；必须填 email。
     unpaywall: SourceSettings = Field(
         default_factory=lambda: SourceSettings(enabled=True, rps=2.0, timeout=20.0, retries=2)
     )
@@ -167,10 +155,9 @@ class SourcesSettings(BaseModel):
 class EmbeddingSettings(BaseModel):
     """向量嵌入设置。
 
-    provider:
-        ``ollama``                 本地 Ollama 嵌入模型（默认，零成本、离线可用）
-        ``sentence-transformers``  本地 PubMedBERT（需装 ``[local-embed]`` 额外依赖）
-        ``hashing``                纯 Python 哈希嵌入，仅供无模型环境下的冒烟测试
+    provider：``ollama`` 本地模型（默认，离线零成本）/
+    ``sentence-transformers`` 本地 PubMedBERT（需装 ``[local-embed]``）/
+    ``hashing`` 纯 Python 哈希，仅供无模型环境冒烟测试。
     """
 
     provider: Literal["ollama", "sentence-transformers", "hashing"] = "ollama"
@@ -187,10 +174,8 @@ class EmbeddingSettings(BaseModel):
 class LLMSettings(BaseModel):
     """推理模型设置。
 
-    provider:
-        ``ollama``            本地 Ollama（默认）
-        ``deepseek``          DeepSeek 云端 API（OpenAI 兼容）
-        ``openai-compatible`` 任意 OpenAI 兼容端点（vLLM / One-API / 硅基流动等）
+    provider：``ollama`` 本地（默认）/ ``deepseek`` 云端（OpenAI 兼容）/
+    ``openai-compatible`` 任意兼容端点（vLLM / One-API / 硅基流动等）。
     """
 
     provider: Literal["ollama", "deepseek", "openai-compatible"] = "ollama"
@@ -199,25 +184,21 @@ class LLMSettings(BaseModel):
     api_key: str = ""
     temperature: float = 0.3
     top_p: float = 0.9
-    #: 单次输出上限。推理模型的思维链与正文共用这个配额（DeepSeek 的
-    #: deepseek-flash / deepseek-v4-pro 都属于推理模型），设得太小会导致
-    #: 模型把预算全花在思考上、正文返回空字符串。用云端推理模型时建议 >= 4000。
+    #: 单次输出上限。推理模型的思维链与正文共用此配额，太小会导致模型把预算
+    #: 花在思考上、正文返回空串；用云端推理模型时建议 >= 4000。
     max_tokens: int = 3000
     timeout: float = 600.0
     think: bool = False          # Qwen3 等推理模型的思考开关
     num_ctx: int = 8192
-    #: Ollama 模型在显存里的保留时长。Ollama 默认只有 5 分钟，一旦超时卸载，
-    #: 下次调用要重新加载——实测 8B 模型重新载入要 60~120 秒，比生成还慢。
-    #: 设成 "-1" 表示常驻不卸载（显存够用时最省时间）。
+    #: Ollama 模型显存保留时长。默认 5 分钟超时即卸载，8B 重载实测要 60~120s；
+    #: "-1" 表示常驻不卸载（显存够用时最省时间）。
     keep_alive: str = "30m"
     failure_hint: str = ""       # 模型不可用时展示给用户的提示
 
     def consistency_error(self) -> str:
         """检查 provider 与 model 是否自洽，不自洽时返回可照做的中文说明。
 
-        这是为了根治一类真实故障：``provider: deepseek`` 却配着
-        ``model: qwen3:8b``（Ollama 的模型名），请求发到云端必然 400，
-        而报错信息是英文的、且不会告诉你该怎么改。
+        针对 ``provider: deepseek`` 却配着 Ollama 本地模型名、云端必然返回 400 的错配。
         """
         name = (self.model or "").strip()
         if not name:
@@ -287,20 +268,16 @@ class AgentSettings(BaseModel):
     require_approval: bool = True   # Plan 后是否等待用户审批
     auto_embed_after_search: bool = True
     writer_max_papers: int = 25     # 送入写作上下文的文献上限
-    #: 交给 LLM 逐篇点评的文献数上限。本地 8B 模型在 CPU 上约 7 tokens/s，
-    #: 评 25 篇要生成上千 token（数分钟），因此默认只让 LLM 评最相关的若干篇，
-    #: 其余用启发式评分兜底（两者等权融合，见 CriticAgent.assess）。
+    #: LLM 逐篇点评的文献上限：本地 8B 在 CPU 上约 7 tokens/s，篇数多要数分钟；
+    #: 其余文献用启发式评分兜底（与 LLM 评分等权融合，见 CriticAgent.assess）。
     critique_max_papers: int = 12
     context_char_budget: int = 24000
     warm_fulltext: bool = True      # 是否为开放获取文献预取全文
     fulltext_top_n: int = 4         # 预取全文的文献数（抓取较慢，不宜过多）
     auto_revise: bool = True        # 自我审查发现问题后是否自动修订一轮
     max_revise_rounds: int = 1
-    #: 综述正文的目标字数范围（中文字符计，不含参考文献）。
-    #: 这是写作提示词里的硬指令：以前每节固定"约 900 字"，5 节只有 4500 字左右，
-    #: 用户普遍反馈太短。改为按总字数范围反推每节目标。
-    #: 注意：字数越大，单节生成时间越长（本地 8B 约 45 tok/s，约 1.7 字/token），
-    #: 而且为了给正文腾出上下文，塞进提示词的材料会被自动裁剪。
+    #: 综述正文目标字数范围（中文字符，不含参考文献），写作提示词里的硬指令。
+    #: 字数越大单节生成越慢，且为给正文腾上下文，塞入的材料会被自动裁剪。
     review_min_chars: int = 4000
     review_max_chars: int = 8000
 
@@ -440,14 +417,9 @@ def _env_overrides(cfg: dict[str, Any]) -> dict[str, Any]:
 
     # LLM
     #
-    # 这里刻意不根据 DEEPSEEK_API_KEY 自动切换 provider。
-    # 曾经这么做过，结果是灾难性的：用户机器上另一个项目把 DEEPSEEK_API_KEY
-    # 设成了用户级环境变量，于是 MedScholar 静默地把后端从 ollama 切到了 deepseek，
-    # 却沿用了 config.yaml 里的 model: qwen3:8b，最终把 Ollama 的模型名发给了
-    # DeepSeek 网关，得到 HTTP 400。
-    # 结论：环境里存在某个 Key，不等于用户想让本程序用它。
-    # Key 只在用户显式把 provider 设为 deepseek/openai-compatible 后才生效。
-    # 想切云端，请改 config.yaml 的 llm.provider（本文件下方会做一致性校验）。
+    # 刻意不根据 DEEPSEEK_API_KEY 自动切换 provider：曾因另一项目设置的用户级
+    # DEEPSEEK_API_KEY 导致后端被静默切到云端、却沿用本地模型名，得到 400。
+    # 环境里有 key 不等于用户想用它；key 只在显式选定云端 provider 后才生效。
     provider = os.environ.get("MEDSCHOLAR_LLM_PROVIDER")
     if provider:
         cfg.setdefault("llm", {})["provider"] = provider

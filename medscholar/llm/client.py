@@ -1,20 +1,8 @@
-"""统一 LLM 客户端。
+"""统一 LLM 客户端，按 llm.provider 路由：ollama（本地默认，支持流式/JSON 模式）、
+deepseek、openai-compatible（任意 OpenAI 兼容端点）。
 
-支持三类后端，通过 ``llm.provider`` 切换：
-
-====================== ====================================================
-``ollama``             本地 Ollama（默认）。零成本、可离线，支持流式与 JSON 模式。
-``deepseek``           DeepSeek 云端 API（OpenAI 兼容），需 API Key。
-``openai-compatible``  任意 OpenAI 兼容端点（vLLM / One-API / 硅基流动 …）。
-====================== ====================================================
-
-设计要点：
-
-* 对外只暴露 :meth:`LLMClient.chat` / :meth:`stream` / :meth:`chat_json`；
-* Ollama 的 ``think`` 开关默认关闭 —— Qwen3 系列默认会输出大段思维链，
-  在流式 UI 里既慢又吵，需要时可通过配置打开；
-* :meth:`chat_json` 对模型输出做容错解析（剥离 ```json 围栏、截取首个
-  平衡的花括号块、容忍尾随逗号），因为本地小模型几乎不会严格输出纯 JSON。
+Ollama think 默认关闭（Qwen3 默认思维链又慢又吵）；chat_json 做容错解析
+（剥围栏、截取平衡花括号块、容忍尾随逗号），本地小模型几乎不严格输出纯 JSON。
 """
 
 from __future__ import annotations
@@ -46,10 +34,9 @@ __all__ = ["Message", "LLMClient", "LLMError", "get_llm", "reset_llm", "extract_
 
 Message = Mapping[str, str]
 
-# JSON 容错解析已拆到 medscholar/llm/json_parsing.py（纯算法、单独测试）。
-# 这里继续重导出 extract_json：它是既有调用方与测试在用的名字。
+# 容错解析拆在 json_parsing.py（纯算法、单独测试）；此处重导出旧名字保持对外 API 不变。
+# LLMError 定义在 errors.py 以断开 json_parsing ↔ client 的环。
 from .json_parsing import extract_json  # noqa: E402  (重导出：对外 API 不变)
-# LLMError 定义在 errors.py（为断开 json_parsing ↔ client 的环），此处重导出。
 
 
 @dataclass(slots=True)
@@ -63,12 +50,8 @@ class _Usage:
 
 
 class LLMClient(OllamaBackend, OpenAIBackend):
-    """按配置路由到具体后端的统一客户端。
-
-    出网调用的重试与熔断在 :mod:`medscholar.llm.transport`，
-    耗时与 token 记账在 :mod:`medscholar.platform.observability`；
-    本类只负责"报文长什么样、错误文案怎么说"。
-    """
+    """按配置路由后端的统一客户端。重试/熔断在 llm.transport，
+    耗时与 token 记账在 platform.observability，本类只管报文与错误文案。"""
 
     def __init__(self, settings: LLMSettings | None = None, *, config: AppConfig | None = None) -> None:
         self.config = config or get_config()
@@ -77,8 +60,7 @@ class LLMClient(OllamaBackend, OpenAIBackend):
         self._client_loop: asyncio.AbstractEventLoop | None = None
         self.usage = _Usage()
         self.calls = 0
-        # 熔断按后端隔离：key 里带上 model，这样"换一个模型"不会被上一个模型的
-        # 连续失败拖累（实测场景：qwen3:8b 未拉取导致 400，换成已装模型仍应可用）。
+        # 熔断按 provider|model|base_url 隔离：换模型不应被前一个模型的连续失败拖累。
         self._breaker_key = f"{self.settings.provider}|{self.settings.model}|{self.settings.base_url}"
         self.breaker = breaker_for(self._breaker_key)
 
@@ -91,11 +73,8 @@ class LLMClient(OllamaBackend, OpenAIBackend):
         await self.close()
 
     async def start(self) -> None:
-        """建立 HTTP 客户端；顺带做 provider/model 一致性校验。
-
-        校验放在这里而不是配置加载时，是为了让任何调用路径（Web / CLI / MCP）
-        都能得到同一条可照做的中文提示，而不是各自去撞云端返回的英文 400。
-        """
+        """建立 HTTP 客户端并做 provider/model 一致性校验。放在此处而非配置加载时，
+        保证 Web/CLI/MCP 各路径拿到同一条可照做的中文提示，而非云端英文 400。"""
         if self._client is None:
             problem = self.settings.consistency_error()
             if problem:
@@ -117,13 +96,9 @@ class LLMClient(OllamaBackend, OpenAIBackend):
             )
 
     async def _ensure_started(self) -> None:
-        """对话方法自动确保已初始化，避免调用方忘记 ``await start()``。
-
-        同时检测事件循环是否变化：``httpx.AsyncClient`` 的连接池绑定在创建它的
-        循环上，若被跨循环复用，请求会永久挂起（实测踩到的故障：
-        在 worker 线程里 ``asyncio.run`` 跑一个同步封装的异步流程）。
-        检测到循环变化就丢弃旧客户端并重建。
-        """
+        """自动确保客户端已初始化；并检测事件循环变化——httpx.AsyncClient 连接池
+        绑定创建时的循环，跨循环复用会永久挂起（如 worker 线程内 asyncio.run），
+        检测到换循环就丢弃旧客户端重建。"""
         loop = asyncio.get_running_loop()
         if self._client is not None and self._client_loop is not loop:
             logger.debug("检测到事件循环变化，重建 LLM HTTP 客户端")
@@ -178,15 +153,8 @@ class LLMClient(OllamaBackend, OpenAIBackend):
         ok: bool = True,
         error_kind: str = "",
     ) -> None:
-        """记一次调用到全局账本 + 本地累计器。
-
-        成功与失败都记：只统计成功调用会得到"平均耗时很漂亮、实际体验很差"的
-        假象（慢的往往正是失败重试的那几次）。失败时 token 记 0，
-        但耗时与错误分类照记，"哪个阶段在烧钱/在超时"才看得出来。
-
-        阶段（plan/execute/reflect/synthesize）与运行号从当前 trace 上下文推断，
-        调用方不必为了记账多传参数。账本是纯内存操作，不会拖慢主流程。
-        """
+        """记账到全局 LEDGER 与本地累计器，成功失败都记（失败 token=0 但耗时/错误照记，
+        否则重试耗时会被统计掩盖）。阶段与 run_id 从当前 trace 上下文推断。"""
         latency_ms = (time.monotonic() - started) * 1000
         if ok:
             self.calls += 1
@@ -253,12 +221,8 @@ class LLMClient(OllamaBackend, OpenAIBackend):
         retries: int = 2,
         expect: str = "object",
     ) -> Any:
-        """要求模型输出 JSON，并做容错解析。
-
-        解析失败、或顶层形状不符合 ``expect`` 时，会把错误回灌给模型重试
-        （本地小模型首次输出常带解释性文字，也常在嵌套的检索式里写坏 JSON）。
-        四个调用方（规划 / 大纲 / 评审 / 反思）要的都是顶层对象。
-        """
+        """要求 JSON 并容错解析；解析失败或顶层形状不符合 expect 时把错误回灌模型重试
+        （小模型常带解释文字或在嵌套检索式里写坏 JSON）。"""
         history = list(messages)
         last_error: Exception | None = None
         for attempt in range(max(1, retries + 1)):

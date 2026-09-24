@@ -1,9 +1,4 @@
-"""Agent 状态与事件模型。
-
-工作流的四节点（Plan → 审批 → Execute → Reflect → Synthesize）共享
-:class:`AgentState`；每个节点通过产出 :class:`AgentEvent` 把进度推给 UI，
-因此同一套图逻辑既能驱动 SSE 前端，也能驱动 CLI。
-"""
+"""Agent 状态与事件模型：各节点共享 ``AgentState``，通过 ``AgentEvent`` 推送进度，同一套图逻辑驱动 SSE 与 CLI。"""
 
 from __future__ import annotations
 
@@ -140,25 +135,11 @@ _SEARCH_MARKERS = (" AND ", " OR ", " NOT ", "[", "]", '"', ":", "*", "(", ")")
 
 
 def coerce_plan_payload(payload: Any) -> dict[str, Any]:
-    """把模型返回的 JSON 归一化成 :class:`ResearchPlan` 需要的字典。
+    """把模型返回的走样 JSON 归一化成 :class:`ResearchPlan` 需要的字典。
 
-    模型并不总是听话。实测 qwen3:8b 在规划阶段返回过顶层数组，直接交给
-    ``ResearchPlan.from_dict`` 会抛 ``'list' object has no attribute 'get'``，
-    整次规划降级成模板大纲。这里把常见的几种走样都救回来：
-
-    - ``{...}``                      → 原样返回；
-    - ``[{...}]``                    → 取出唯一的对象；
-    - ``[{"topic_zh":...}, {"queries":[...]}]`` → 合并成一个对象（对象被拆散了）；
-    - ``[{"query":...}, ...]``       → ``{"queries": [...]}``；
-    - ``[{"title":...}, ...]``       → ``{"outline": [...]}``；
-    - ``["...", ...]``               → 像检索式的进 queries，否则当 key_questions；
-    - 其它（字符串/数字/null）        → ``{}``，交给调用方的兜底逻辑。
-
-    实测 qwen3:8b 在规划阶段返回过 ``["抑郁症状改善（如HAMD评分）", "治疗反应率", ...]``
-    —— 那其实是 ``pico.outcomes`` 数组。这类裸字符串列表含义不明：既不是章节标题，
-    也不一定是检索式。所以只在含检索语法时当成 queries，其余一律放进 key_questions
-    （只用于展示），让 outline / queries 留空，好让 graph 里既有的兜底补上
-    标准综述大纲与「用课题本身检索」，而不是把结局指标当成章节标题。
+    兼容顶层数组、被拆散成多个对象的计划、裸 queries/outline 对象数组；
+    裸字符串列表仅在含检索语法记号时进 queries，否则放 key_questions，
+    outline/queries 留空交给 graph 兜底，避免把结局指标误当章节标题。
 
     >>> coerce_plan_payload([{"topic_zh": "rTMS"}, {"outline": []}])["topic_zh"]
     'rTMS'
@@ -187,9 +168,7 @@ def coerce_plan_payload(payload: Any) -> dict[str, Any]:
             return {"outline": [dict(item) for item in dicts]}
         if len(dicts) == 1:
             only = dict(dicts[0])
-            # 单元素数组只是外面多包了一层壳
             return only
-        # 多个对象各带一部分字段 → 合并，尽量把整份计划拼回来
         merged: dict[str, Any] = {}
         for item in dicts:
             for key, value in item.items():
@@ -203,21 +182,17 @@ def coerce_plan_payload(payload: Any) -> dict[str, Any]:
         ]
         if sum(looks_like_query) * 2 >= len(strings):
             return {"queries": [{"query": text.strip()} for text in strings]}
-        # 含义不明 → 只当展示用的关键问题，outline/queries 留空交给兜底
         return {"key_questions": [text.strip() for text in strings]}
 
-    # 混合类型：留下能用的部分
     if dicts:
         return coerce_plan_payload(dicts)
     return {}
 
 
 def _usable_query(text: str) -> bool:
-    """检索式必须含真正的词/字，不能只是标点。
+    """检索式必须含真正的词/字，不能只是标点（模型截断时可能留下 ``"("`` 残串）。
 
-    实测模型在被截断时留下过 ``"query": "("``。若把它当成有效检索式，
-    Scout 就会拿一个左括号去检索，返回一堆无关结果；
-    过滤掉之后 ``queries`` 为空，graph 会退回「用课题本身检索」。
+    过滤后 queries 为空时，graph 退回「用课题本身检索」。
     """
     stripped = text.strip()
     if not stripped:
@@ -490,12 +465,10 @@ class AgentState:
     search_stats: list[dict[str, Any]] = field(default_factory=list)
 
     errors: list[str] = field(default_factory=list)
-    #: 本次运行的综述正文目标字数（0 表示沿用配置里的默认值）。
-    #: 放在状态里，是为了让"每次运行一个字数范围"和断点续跑都能带上它。
+    #: 本次运行的正文目标字数（0 用配置默认值）；放在状态里以便逐运行设置与断点续跑携带。
     review_min_chars: int = 0
     review_max_chars: int = 0
-    #: 断点续跑：上次已完成的阶段名（plan/execute/reflect/synthesize/review）。
-    #: 为空表示这是一次全新运行。
+    #: 断点续跑：上次已完成的阶段名（plan/execute/reflect/synthesize/review），空表示全新运行。
     resumed_from: str = ""
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
@@ -515,8 +488,7 @@ class AgentState:
     ) -> list[tuple[int, Paper]]:
         """挑选进入写作上下文的文献，返回 ``[(引用编号, Paper), ...]``。
 
-        编号在筛选之后重新连续分配，确保正文里的 ``[n]`` 与参考文献表
-        严格一一对应（这是引用准确性最容易出错的地方）。
+        筛选后由调用方重新连续编号，保证正文 ``[n]`` 与参考文献表严格一一对应。
         """
         if not self.citation_map:
             return []

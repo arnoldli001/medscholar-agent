@@ -1,11 +1,4 @@
-"""多数据源统一调度。
-
-Scout Agent 只面对 :class:`SourceRegistry`：并发调用多个客户端、
-收集每个数据源的成败、合并去重，最后交回一份统一的文献列表。
-
-单个数据源失败（限流、结构变更、网络故障）不影响整体，
-失败原因会记录在 :class:`SourceStatus` 中，供前端展示与 Critic 评估。
-"""
+"""多数据源统一调度：并发调用、隔离单源失败（记入 SourceStatus）、合并去重。"""
 
 from __future__ import annotations
 
@@ -238,10 +231,8 @@ class SourceRegistry:
     ) -> SearchOutcome:
         """并发检索多个数据源，去重合并后返回。
 
-        Args:
-            offline: 显式覆盖离线开关。注册表是跨会话共享的单例，
-                而每次 Agent 运行可能有自己的离线设置，因此必须由调用方传入，
-                否则一次"离线运行"仍会真的去联网。
+        offline 必须由调用方传入：注册表是跨会话单例，而每次运行的离线设置不同，
+        否则"离线运行"仍会联网。
         """
         started = time.perf_counter()
         names = self.select_sources(sources)

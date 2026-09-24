@@ -1,19 +1,7 @@
-"""引用格式化引擎。
+"""引用格式化引擎：apa7（作者-年份）、vancouver（数字制，医学常用）、
+gb7714（GB/T 7714-2015 中文标准）、chicago（作者-年份）、bibtex、ris。
 
-支持需求文档要求的全部导出格式：
-
-============ ==========================================================
-``apa7``     APA 第 7 版（作者-年份制）
-``vancouver`` Vancouver（数字制，医学期刊最常用）
-``gb7714``   GB/T 7714-2015（中文期刊与学位论文标准）
-``bibtex``   BibTeX（LaTeX / Zotero / EndNote 通用）
-``ris``      RIS（EndNote / NoteExpress / Zotero 通用）
-``chicago``  Chicago 作者-年份制（部分社科期刊）
-============ ==========================================================
-
-作者姓名在 :class:`~medscholar.models.Paper` 中统一按「姓 名」顺序存储
-（见各 API 客户端的 ``to_family_first`` 归一化），因此本模块可以稳定地
-提取姓氏，而不必猜测姓名顺序。
+前提：作者姓名已由各 API 客户端 to_family_first 统一为「姓 名」顺序，可直接提取姓氏。
 """
 
 from __future__ import annotations
@@ -314,13 +302,8 @@ def format_reference_list(
     numbered: bool | None = None,
     sort: str = "cited",
 ) -> str:
-    """生成整份参考文献表。
-
-    Args:
-        numbered: 是否加序号；``None`` 时按样式决定（数字制加序号）。
-        sort: ``cited`` 保持传入顺序（正文引用顺序）；``author`` 按作者排序；
-              ``year`` 按年份降序。
-    """
+    """生成整份参考文献表。numbered=None 时按样式决定（数字制加序号）；
+    sort: cited 保持引用顺序 / author 按作者 / year 按年份降序。"""
     style = detect_style(style)
     items = [p for p in papers if p]
     if style in {"bibtex", "ris"}:

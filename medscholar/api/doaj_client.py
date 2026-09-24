@@ -1,11 +1,6 @@
-"""DOAJ（Directory of Open Access Journals）客户端。
+"""DOAJ 客户端：两万余种完全 OA 期刊题录，补 PubMed 不收的综合/工程/社科 OA 期刊。
 
-PubMed / Europe PMC 偏生物医学，OpenAlex 不能只筛开放获取期刊。DOAJ 收录
-两万余种完全开放获取期刊的论文题录，适合找 PubMed 不收的 OA 综合/工程/
-社科期刊，或"只要合法全文"的场景。
-
-免费、无需 API Key。接口：``GET https://doaj.org/api/search/articles/{query}``
-文档：https://doaj.org/api/v2/docs
+免费无 Key，接口 GET /api/search/articles/{query}。
 """
 
 from __future__ import annotations

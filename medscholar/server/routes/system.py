@@ -1,13 +1,6 @@
-"""基础路由：健康探测、脱敏配置、统计、数据源，以及首页与 favicon。
+"""基础路由：健康探测、脱敏配置、统计、数据源与首页/favicon（页面路由不进 OpenAPI）。
 
-对应标签 ``tags=["基础"]``，另含两个不进入 OpenAPI 文档的页面路由（``/`` 与
-``/favicon.ico``，原在 ``app.py::_mount_static`` 内定义）。
-
-``/api/health`` 绝不能阻塞。早期实现每次调用都真的去生成一次 LLM 回复
-（"回复两个字：可用"）并探测嵌入模型。实测：模型已载入时耗时 4~5.6 秒，
-冷启动（模型不在内存）时 25~35 秒——而前端首屏就调它、超时只有 15 秒。
-结果是页面一打开就满屏"连不上后端"，而且每次刷新都白白烧掉一次推理。
-现在改为立即返回上次探测结果（可能标记为"检测中"），后台任务异步刷新。
+/api/health 绝不能阻塞：立即返回上次探测结果（可能标记"检测中"），后台任务异步刷新。
 """
 
 from __future__ import annotations
@@ -28,10 +21,7 @@ from ..deps import WEB_DIR, get_config, get_db, get_registry, render_index
 router = APIRouter()
 
 # ------------------------------------------------------------------ 进程级探测状态
-#
-# 这三个状态以前是 _register_routes 里的局部变量（每次装配应用各一份）。
-# 提到模块级后语义是"进程启动至今"：本地工具只装配一次应用（app = create_app()），
-# 多次装配也只该共享同一份探测缓存，否则第二个应用会重复烧一次推理。
+# 语义为"进程启动至今"：多次装配应用也共享同一份探测缓存，避免重复烧一次推理
 probe_cache: dict[str, Any] = {"llm": None, "embedding": None, "at": 0.0}
 probe_task: dict[str, "asyncio.Task[None] | None"] = {"task": None}
 started_at = time.time()
@@ -137,14 +127,9 @@ async def sources() -> dict[str, Any]:
 
 @router.get("/api/metrics", tags=["基础"])
 async def metrics() -> dict[str, Any]:
-    """运行指标：LLM 用量与成本、后端熔断状态、检索内容注入扫描、schema 版本。
+    """运行指标：LLM 用量成本、熔断状态、注入扫描等聚合数字。
 
-    没有指标就只能靠翻日志。上线后要回答的三个问题——"这次综述花了多少
-    token / 多少钱"、"慢在规划还是写作"、"模型后端是不是在连续失败"——
-    都应该一眼看到，而不是 grep 几万行日志。
-
-    这里只暴露聚合数字，不含任何文献内容或提示词正文：
-    指标接口常被贴到 issue 或群里，不能顺手泄漏用户数据。
+    只暴露聚合数字，不含文献内容或提示词正文（指标接口常被贴到 issue/群里，不能泄漏用户数据）。
     """
     from ...llm.transport import breaker_stats
     from ...platform.cache import cache_stats
@@ -163,11 +148,7 @@ async def metrics() -> dict[str, Any]:
 
 @router.get("/api/metrics/schema", tags=["基础"])
 async def schema_status() -> dict[str, Any]:
-    """数据库 schema 版本与待执行迁移（只读）。
-
-    单独一个路径而不是塞进 /api/metrics：迁移状态需要打开数据库并读元表，
-    比纯内存指标重得多；分开之后监控系统可以只轮询轻量的那个。
-    """
+    """数据库 schema 版本与待执行迁移（只读）；单独路径因需读 DB 元表，比内存指标重。"""
     from ...db.migrate import migration_status
 
     db = get_db()
@@ -182,10 +163,7 @@ async def schema_status() -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------ 首页与图标
-#
-# 这两个路由不进入 OpenAPI（include_in_schema=False），与前端"页面"而非"接口"同源。
-# 首页仍走 render_index：注入带 mtime 的静态资源版本号，并强制 no-store，
-# 保证用户每次刷新都拿到磁盘上的当前 JS/CSS（详见 deps.render_index 的说明）。
+# 页面路由不进 OpenAPI；首页经 render_index 注入 mtime 版本号并强制 no-store
 @router.get("/", include_in_schema=False)
 async def index() -> Any:
     index_file = WEB_DIR / "index.html"

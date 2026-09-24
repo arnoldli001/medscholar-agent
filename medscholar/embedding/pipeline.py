@@ -1,11 +1,5 @@
-"""嵌入生成管道：增量地为库中文献生成向量。
-
-流程：取 ``papers`` 表中尚无向量的文献，用配置的嵌入模型对
-「标题 + MeSH + 摘要」生成向量，批量写入 ``paper_embeddings``
-（vec0 虚拟表或回退表）。:func:`embed_query` 提供查询侧嵌入，供混合检索用。
-
-嵌入失败不阻断入库，只记入报告，下次运行会重试。
-"""
+"""增量嵌入管道：扫描无向量的文献，对「标题 + MeSH + 摘要」生成向量批量写表；
+embed_query 供查询侧嵌入。嵌入失败不阻断入库，只记入报告，下次重试。"""
 
 from __future__ import annotations
 
@@ -18,8 +12,7 @@ from typing import Any, Sequence
 
 from ..config import AppConfig, get_config
 from ..db.connect import Database, get_db
-# 直接依赖数据层的具体模块，而不是 db.repo 门面：门面是给历史调用点用的，
-# 新代码走子模块可以让依赖图更精确（也让架构校验看得清真实边界）。
+# 直接依赖子模块而非 db.repo 门面，让依赖图/架构校验看到真实边界。
 from ..db.repositories.embeddings import papers_missing_embeddings, store_embeddings
 from ..db.repositories.papers import get_paper
 from .providers import EmbeddingProvider, get_provider
@@ -145,12 +138,8 @@ async def _embed_ids(
 async def _sync_embedding_dim(
     database: Database, provider: EmbeddingProvider, cfg: AppConfig
 ) -> None:
-    """探测模型实际维度并与向量表对齐。
-
-    换嵌入模型（例如从 768 维的 ``nomic-embed-text`` 换成 1024 维的 ``bge-m3``）
-    时只需改 ``embedding.model``，维度会自动校正并重建向量表，
-    不会出现"维度不符"的报错。
-    """
+    """探测模型实际维度并与向量表对齐：换模型（如 768→1024）只改 embedding.model，
+    维度自动校正、重建向量表，避免"维度不符"。"""
     if database.get_meta("dim_probe_done") == f"{provider.name}:{provider.model}":
         return
     try:
@@ -183,10 +172,8 @@ async def run_embedding_pipeline_async(
 ) -> EmbeddingReport:
     """增量嵌入管道（异步）。
 
-    Args:
-        ids: 只处理这些文献；``None`` 表示扫描全库缺失向量的文献。
-        limit: 单次最多处理多少篇（防止首次跑满 CPU）。
-        force: 为 ``True`` 时忽略"已有向量"，对 ``ids`` 强制重算。
+    ids 为 None 时扫描全库缺失向量的文献；limit 限制单次篇数（防首次跑满 CPU）；
+    force=True 时忽略已有向量对 ids 强制重算。
     """
     database = db or get_db()
     cfg = config or get_config()
@@ -259,14 +246,10 @@ def embed_paper(
 async def embed_query(
     text: str, *, config: AppConfig | None = None
 ) -> list[float] | None:
-    """把检索词转成查询向量；提供方不可用时返回 ``None``（调用方退化为纯 BM25）。
+    """检索词转向量；提供方不可用返回 None（调用方退化为纯 BM25）。
 
-    带缓存：同一检索词会被反复嵌入（改词、切筛选、重复点检索），
-    每次都是一次真实的模型/网络调用。缓存键为 ``(provider, model, text)``，
-    必须带模型名：换模型后若拿到旧模型的向量，维度相同、数值不同，
-    不会报错，只会让检索结果悄悄变差。
-
-    TTL 默认 1 小时，进程重启即失效。查询向量便宜，也没有跨进程一致性问题。
+    缓存键必须含模型名：换模型后误用旧向量不会报错，但检索结果会悄悄变差。
+    TTL 1 小时，进程重启失效。
     """
     from ..platform.cache import cache_registry
 

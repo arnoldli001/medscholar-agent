@@ -1,8 +1,6 @@
-"""会话、课题与维护路由：``tags=["会话"]`` + ``tags=["课题"]`` + ``tags=["维护"]``。
+"""会话 / 课题 / 维护路由：对话现场、文献分组，以及嵌入补齐、OA 全文补齐、FTS 优化与 VACUUM。
 
-三者归在同一个 router，是因为它们都是围绕本地库的组织与保养：会话/消息
-记录对话现场，课题把文献分组，维护接口负责嵌入补齐、开放获取全文补齐、FTS 优化与
-VACUUM。它们都不触发 LLM 生成（全文补齐只抓开放获取正文，绝不绕过付费墙）。
+均不触发 LLM；全文补齐只抓开放获取正文，绝不绕过付费墙。
 """
 
 from __future__ import annotations
@@ -120,25 +118,19 @@ async def maintenance_embed(req: EmbedRequest) -> dict[str, Any]:
 
 @router.post("/api/maintenance/fulltext", tags=["维护"])
 async def maintenance_fulltext(req: FulltextBackfillRequest) -> dict[str, Any]:
-    """为开放获取文献补齐全文（Europe PMC JATS → PMC → OA PDF）。
-
-    默认入库的是元数据与摘要，不含全文——这是刻意的：
-    全文体积大、抓取慢，而且只有开放获取文献才允许保存。
-    用户需要全文检索或更深入的综述引用时，用本接口按需补齐。
-    """
+    """为 OA 文献按需补齐全文（默认只存元数据与摘要：全文体积大、抓取慢且仅限 OA）。"""
     db = get_db()
 
     if req.paper_ids:
         candidates = [repo.get_paper(pid, db=db) for pid in req.paper_ids]
         papers = [p for p in candidates if p is not None]
     else:
-        # 优先 PMCID（Europe PMC 稳定）→ 再 OA 链接；并跳过已有全文的，
-        # 因此本操作可以反复执行而不会重复劳动
+        # 优先 PMCID 再 OA 链接，并跳过已有全文的，操作可反复执行不重复劳动
         papers = await asyncio.to_thread(
             repo.fulltext_candidates, limit=req.limit, db=db
         )
 
-    # 只处理开放获取文献：非 OA 的一律跳过，绝不绕过付费墙
+    # 只处理 OA 文献，非 OA 一律跳过，绝不绕过付费墙
     targets = [p for p in papers if p and (p.is_open_access or p.pmcid)]
     skipped = len([p for p in papers if p]) - len(targets)
 
@@ -148,8 +140,7 @@ async def maintenance_fulltext(req: FulltextBackfillRequest) -> dict[str, Any]:
     fetched = 0
     failed = 0
     errors: list[str] = []
-    #: 按原因归类统计 —— 只回一句"失败 100 条"让人无从判断，
-    #: 而实际上其中近一半是"文献本身就没有正文"这类正常情况。
+    #: 按原因归类失败统计；近半失败实为"文献本身无正文"等正常情况，只报总数无法判断
     reasons: dict[str, dict[str, Any]] = {}
 
     async def note_failure(paper: Any, message: str) -> None:

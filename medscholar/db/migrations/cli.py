@@ -1,17 +1,7 @@
-"""迁移命令行（``python -m medscholar.db.migrate``）。
+"""迁移命令行（入口是 ``python -m medscholar.db.migrate``，不是本模块）。
 
-解析参数、解析库路径、建连接都是入口层的事。
-把它们和执行器放在一起会让 :class:`~medscholar.db.migrate.MigrationRunner`
-所在模块混进"取配置""开连接"这类与迁移语义无关的细节，
-也让"执行器有多大"变得难以判断（框架核心应当能被一眼读完）。
-
-本模块只向下依赖 ``migrations.base`` / ``migrations.registry``，
-不 import ``medscholar.db.migrate``：入口与执行器互相 import 会形成循环依赖
-（``scripts/check_arch.py`` 会把环报红），所以执行入口统一由
-:func:`medscholar.db.migrate.main` 提供，它把 :class:`MigrationRunner` 注入进来。
-
-命令的默认动作是只打印状态、不改库：迁移是危险操作，
-必须显式 ``--apply`` 才会动手；``--plan`` / ``--dry-run`` 提供零风险的预演。
+本模块只做参数解析/开连接，不 import medscholar.db.migrate 以避免循环依赖：
+MigrationRunner 由 migrate.main 工厂注入。默认只打印状态，必须显式 --apply 才改库。
 """
 
 from __future__ import annotations
@@ -28,9 +18,7 @@ from .registry import MIGRATIONS
 
 __all__ = ["build_parser", "run", "main"]
 
-#: 建 runner 的工厂签名（由 :mod:`medscholar.db.migrate` 注入）。
-#: 用 Callable 而不是直接 import 具体类，是为了打断"入口 ↔ 执行器"的循环依赖：
-#: 入口只要求"给我一个能跑迁移的对象"，不关心它在哪个模块里。
+#: runner 工厂（由 medscholar.db.migrate 注入）；用 Callable 打断入口↔执行器的循环依赖。
 RunnerFactory = Callable[..., Any]
 
 
@@ -69,10 +57,7 @@ def _resolve_path(raw: str | None) -> Path:
 
 
 def _connect(path: Path) -> sqlite3.Connection:
-    """CLI 专用连接：与 ``Database`` 一样开 WAL 与外键，但不加载扩展。
-
-    迁移只做 DDL，不需要 sqlite-vec；少一个扩展就少一个"在朋友机器上装不上"的可能。
-    """
+    """CLI 专用连接：开 WAL/外键但不加载 sqlite-vec（迁移只做 DDL，少一个扩展依赖）。"""
     conn = sqlite3.connect(str(path), timeout=30.0, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -82,11 +67,7 @@ def _connect(path: Path) -> sqlite3.Connection:
 
 
 def _configure_logging(quiet: bool) -> None:
-    """只在本进程尚未配置日志时挂 handler。
-
-    脚本里跑迁移时"用了哪份备份、应用了哪些版本"必须看得见；
-    而宿主进程（``init_database``）已经配好日志时不要重复添加 handler。
-    """
+    """仅在进程尚未配置日志时挂 handler，避免宿主进程（init_database）重复输出。"""
     if not logging.getLogger().handlers:
         logging.basicConfig(
             level=logging.WARNING if quiet else logging.INFO,
@@ -177,18 +158,7 @@ def run(
 
 
 def main(argv: list[str] | None = None, *, runner_factory: RunnerFactory) -> int:
-    """CLI 入口别名（实际逻辑见 :func:`run`）。
-
-    这里没有 ``if __name__ == "__main__":``，也不是 ``-m`` 的运行入口。
-    原因是依赖方向：``cli`` 需要 ``MigrationRunner``，而 ``migrate`` 需要 ``cli``。
-    如果 cli 直接 import migrate（哪怕写在函数体里），
-    ``scripts/check_arch.py`` 就会报 ``db.migrate ↔ db.migrations.cli`` 循环依赖。
-    这个环是用工厂注入打断的：命令行入口放在 :mod:`medscholar.db.migrate`，
-    由它把 ``MigrationRunner`` 传进来。
-
-    所以正确的命令是 ``python -m medscholar.db.migrate``（见 scripts/README.md）。
-    踩过的坑：曾按想当然的模块名把文档写成 ``-m medscholar.db.migrations.cli``，
-    发现"没输出"后又在这里加了 ``__main__``，
-    把刻意打断的环又接了回去，随即被架构校验器抓住。
-    """
+    """CLI 入口别名（实际逻辑见 run()）。本模块不能加 ``__main__`` 或 import
+    migrate，否则形成 db.migrate ↔ db.migrations.cli 循环依赖（架构校验会报红）；
+    正确命令是 ``python -m medscholar.db.migrate``。"""
     return run(argv, runner_factory=runner_factory)

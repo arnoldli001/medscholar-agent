@@ -1,19 +1,8 @@
-"""文献主表（papers）的读写：入库/去重富化、取回、分页列举、统计与删除。
+"""文献主表（papers）读写：入库/去重富化、取回、分页列举、统计与删除。
 
-它是最底层的数据边界：混合检索要读它的元数据过滤、向量与全文回填
-要读它挑候选、课题要按它分页。放在底层，兄弟模块可以依赖它，而它不依赖任何兄弟模块。
-
-关于 ``embed=True``：入库时顺带嵌入是调用方的便利，不是数据层的职责。
-原来这里直接 ``from ...embedding.pipeline import embed_paper``，
-形成 ``db.repositories.papers ↔ embedding.pipeline`` 的循环依赖
-（pipeline 又要 import 数据层来读文献）。
-
-现在改成依赖倒置：数据层只留一个空钩子，由嵌入层在导入时注册自己
-（``medscholar/embedding/__init__.py`` → :func:`register_embed_hooks`）。
-数据层不 import 嵌入层，环被打破，``embed=True`` 的调用方式不变。
-
-钩子没注册却传了 ``embed=True`` 时直接报错而不是静默跳过：
-"以为嵌入了其实没有"会让向量检索悄悄少掉一批文献，比报错难查得多。
+本模块是最底层数据边界，不依赖兄弟模块。``embed=True`` 走依赖倒置的注册钩子
+（由 medscholar.embedding 导入时注册），避免 papers ↔ embedding.pipeline 循环依赖；
+钩子未注册却传 embed=True 直接报错，静默跳过会让向量检索悄悄漏掉文献。
 """
 
 from __future__ import annotations
@@ -53,11 +42,7 @@ def register_embed_hooks(
     embed_one: Callable[[int, Database], Any],
     embed_many: Callable[[Sequence[int], Database], Any],
 ) -> None:
-    """由嵌入层注册"入库后自动嵌入"的实现。
-
-    只在 :mod:`medscholar.embedding` 导入时调用一次。这样数据层不必 import 嵌入层，
-    依赖方向从"数据层 → 嵌入层 → 数据层"的环变成"嵌入层 → 数据层"的单向依赖。
-    """
+    """由嵌入层在导入时注册"入库后自动嵌入"实现，把双向环变成嵌入层→数据层的单向依赖。"""
     global _EMBED_ONE, _EMBED_MANY
     _EMBED_ONE, _EMBED_MANY = embed_one, embed_many
 

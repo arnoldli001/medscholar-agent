@@ -1,23 +1,9 @@
-"""模型输出的 JSON 容错解析（纯函数，无 IO、无状态）。
+"""模型输出的 JSON 容错解析（纯函数、无 IO，密集测试在 tests/test_llm_json.py）。
 
-从 ``llm/client.py`` 拆出来的原因：这部分是纯算法（剥离围栏、截取平衡括号、
-补全截断、修复尾随逗号），与"怎么发请求、怎么记账"无关，
-却是整个 LLM 层里最需要密集测试的一段。拆开后可以被单独测
-（``tests/test_llm_json.py``），``client.py`` 也回到 500 行以内。
-
-为什么不能直接 ``json.loads``：本地小模型几乎不会严格输出纯 JSON。
-实测 qwen3:8b 至少四种坏法：
-
-1. 外面包一层 ```` ```json ```` 围栏，或前面带一句"好的，这是结果："；
-2. 生成到一半陷入空白循环，把 token 预算烧完，JSON 被截断；
-3. 字符串里出现未转义的引号（检索式里最常见）；
-4. 尾部多一个逗号。
-
-形状感知为什么关键：``expect="object"`` 会只接受顶层对象。这不是洁癖：
-实测残缺对象里第一个配平的 ``[...]`` 恰好是 ``pico.outcomes``；
-不限定形状时，就会把"结局指标数组"当成整份计划返回，
-``topic_zh`` / ``queries`` / ``outline`` 全部静默丢失，
-表现为"规划莫名其妙只出来一个结局列表"。
+小模型不保证纯 JSON：Markdown 围栏/前置解释文字、空白循环导致截断、
+字符串内未转义引号、尾随逗号，均需容错。形状感知（expect="object"/"array"）必须保留：
+残缺对象里第一个配平的 ``[...]`` 可能只是 pico.outcomes，不限定形状会把指标数组
+当成整份计划，topic_zh/queries/outline 静默丢失。
 """
 
 from __future__ import annotations
@@ -34,16 +20,8 @@ _FENCE_RE = re.compile(r"```(?:json|JSON)?\s*(.*?)```", re.DOTALL)
 
 
 def extract_json(text: str, *, expect: str = "any") -> Any:
-    """从模型输出中尽力提取 JSON。
-
-    依次尝试：直接解析 → 剥离 Markdown 围栏 → 截取首个平衡的 ``{...}`` 或 ``[...]``
-    → 补全被截断的对象 → 修复尾随逗号 / 中文引号后重试。
-
-    ``expect`` 为 ``"object"`` 或 ``"array"`` 时只接受该形状的顶层结果。
-    这一点很关键：实测 qwen3:8b 生成 ``queries`` 时写坏过 JSON，而残缺对象里
-    第一个配平的 ``[...]`` 恰好是 ``pico.outcomes``；不限定形状就会把
-    结局指标数组当成整份计划返回，``topic_zh`` / ``queries`` / ``outline`` 全部丢失。
-    """
+    """尽力提取 JSON：直接解析 → 剥 Markdown 围栏 → 截取首个平衡块
+    → 补全截断对象 → 修复尾随逗号/中文引号。expect 限定顶层形状（object/array）。"""
     if not text:
         raise LLMError("模型返回为空，无法解析 JSON")
     text = text.strip()
@@ -91,13 +69,8 @@ def _leading_opener(text: str) -> str | None:
 
 
 def _close_truncated(fragment: str) -> str | None:
-    """补全被截断的 JSON：退到最后一个完整的值，再补上未闭合的括号。
-
-    本地小模型偶尔会在生成到一半时陷入空白循环，把 token 预算烧完（实测
-    qwen3:8b 在 ``"queries"`` 里输出 ``"query": "("`` 之后就只剩换行）。
-    这时整个对象虽然不合法，但前面已经生成好的 ``topic_zh`` / ``pico``
-    都是完好的，值得捞回来。
-    """
+    """补全被截断的 JSON：退到最后一个完整值再补未闭合括号。
+    小模型陷入空白循环烧完 token 时，前面已生成的字段仍然完好，值得捞回。"""
     stack: list[str] = []
     in_string = False
     escaped = False
@@ -138,8 +111,7 @@ def _json_candidates(text: str) -> list[str]:
     if fenced:
         bases.append(fenced.group(1).strip())
 
-    # 只按文本自己声明的形状找块：以 `{` 开头就只认对象。否则残缺对象里第一个
-    # 配平的 `[...]` 会被当成答案（见 extract_json 的说明）。
+    # 只按文本自己声明的形状找块，避免残缺对象里第一个配平的 [...] 被误当答案（见模块说明）。
     lead = _leading_opener(text)
     if lead == "{":
         pairs = [("{", "}")]

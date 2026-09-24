@@ -1,9 +1,4 @@
-"""课题、会话与消息：项目的组织单位（projects / project_papers）和对话记录（chat_sessions / chat_messages）。
-
-这两组表服务的是"用户怎么组织自己的工作"，而不是文献或检索本身：
-课题只是给文献打分组标签，会话只是消息流水，不需要懂去重、向量或检索策略，
-所以单独拆出来。
-"""
+"""课题（projects/project_papers，文献分组）与会话消息（chat_sessions/chat_messages）。"""
 
 from __future__ import annotations
 

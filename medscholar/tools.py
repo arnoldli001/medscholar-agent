@@ -1,13 +1,10 @@
 """工具层：以统一 schema 暴露给 MCP Server 与外部 Agent 调用。
 
-每个工具都是「纯函数 + JSON Schema」，不依赖 FastAPI，
-因此既能被 :mod:`medscholar.mcp.server` 包装成 MCP Tool，
-也能被 CLI 直接调用。
-
-设计约定：
+每个工具都是「纯函数 + JSON Schema」，不依赖 FastAPI，既能被 MCP 包装成 Tool，
+也能被 CLI 直接调用。约定：
 
 * 输入输出只使用可无损 JSON 化的数据（不返回 ORM/连接对象）；
-* 每个工具都自行捕获异常并返回 ``{"ok": false, "error": ...}``，
+* 每个工具自行捕获异常并返回 ``{"ok": false, "error": ...}``，
   避免一个工具失败导致整个 Agent 会话崩溃。
 """
 

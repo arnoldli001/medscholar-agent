@@ -1,12 +1,5 @@
-"""Crossref 客户端。
-
-Crossref 是 DOI 的官方注册机构，元数据权威、完全免费、无需 Key，
-覆盖大量中文期刊与外文期刊，是 DOI 补全与引用列表的可靠来源。
-
-* ``/works?query.bibliographic=`` —— 书目检索
-* ``/works/{doi}`` —— 单篇详情（含 ``reference[]`` 参考文献表）
-* 带 ``mailto`` 进入 polite pool
-"""
+"""Crossref 客户端（DOI 官方注册机构，免费无 Key）：书目检索 /works?query.bibliographic、
+单篇详情 /works/{doi}（含 reference[]）；带 mailto 进 polite pool。"""
 
 from __future__ import annotations
 

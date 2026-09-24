@@ -1,14 +1,6 @@
-"""MCP Server：把 MedScholar 的检索/格式化能力以 Model Context Protocol 暴露出去。
+"""MCP Server：把检索/格式化能力以 Model Context Protocol 暴露给 Claude Desktop、Cursor 等客户端。
 
-用途：让 Claude Desktop、Cursor、Cherry Studio 等任意支持 MCP 的客户端
-直接调用本地知识库与学术检索能力（需求 3.3）。
-
-启动::
-
-    .python\\python.exe -m medscholar.mcp.server          # stdio 传输
-    .python\\python.exe -m medscholar.mcp.server --http   # 流式 HTTP 传输
-
-依赖可选的 ``mcp`` 包：``.python\\python.exe -m pip install mcp``
+启动：python -m medscholar.mcp.server（stdio），加 --http 走流式 HTTP；依赖可选的 mcp 包。
 """
 
 from __future__ import annotations

@@ -1,7 +1,6 @@
-"""检索与问答路由：``tags=["检索"]``（检索式预览、联网检索）+ ``tags=["问答"]``。
+"""检索与问答路由：检索式预览、联网检索与知识库问答（SSE）。
 
-三者共享同一个"用户输入 → 检索式"的解析源头（``medscholar.query``），
-预览与真正检索因此所见即所发；问答只打本地知识库，不联网、不写综述。
+预览与检索共用 medscholar.query 解析源头，所见即所发；问答只打本地知识库，不联网、不写综述。
 """
 
 from __future__ import annotations
@@ -55,13 +54,9 @@ class AskRequest(BaseModel):
 # ============================================================ 路由
 @router.post("/api/query/preview", tags=["检索"])
 async def query_preview(req: QueryPreviewRequest) -> dict[str, Any]:
-    """把用户的检索输入解析成结构化查询，并给出各数据源的实际检索式。
+    """解析检索输入并回显各数据源的实际检索式（前端「将检索：…」实时回显）。
 
-    前端用它做「将检索：…」的实时回显——用户不必记布尔语法，
-    看一眼就知道空格/逗号/竖线/减号被理解成了什么。
-
-    解析逻辑与真正检索时完全同源（同一个 ``medscholar.query``），
-    因此预览所见即实际所发。
+    与联网检索同源（同一个 ``medscholar.query``），预览所见即实际所发。
     """
     from ...query import BOOLEAN_SOURCES, SUPPORTED_SYNTAX_HELP, for_source, parse_query
 
@@ -123,13 +118,9 @@ async def live_search(req: LiveSearchRequest) -> dict[str, Any]:
 
 @router.post("/api/ask", tags=["问答"])
 async def ask(req: AskRequest, request: Request) -> StreamingResponse:
-    """基于本地知识库回答问题（不启动完整研究工作流）。
+    """基于本地知识库的问答 SSE：混合检索 → 拼材料 → LLM 回答，不联网、不写综述、不走审批。
 
-    与 ``/api/agent/run`` 的区别：这里不做联网检索、不写综述、不走审批，
-    只做「混合检索 → 拼接材料 → LLM 回答」，因此几秒到一分钟就能给出答案。
-
-    以 SSE 流式返回，因为本地 8B 模型生成 300 字要约一分钟，
-    不流式的话用户会以为卡死。
+    本地 8B 生成 300 字要约一分钟，非流式用户会以为卡死，故必须流式。
     """
     from ...llm.client import LLMError, get_llm
     from ...llm.prompts import ASK_SYSTEM, ask_user
@@ -145,11 +136,9 @@ async def ask(req: AskRequest, request: Request) -> StreamingResponse:
             return f"event: {event_type}\ndata: {body}\n\n".encode("utf-8")
 
         try:
-            # 1) 本地混合检索
             yield pack("status", {"message": "正在检索本地知识库…"})
             hits = await search_knowledge_base(question, top_k=req.top_k, db=db)
 
-            # 2) 组装材料并分配引用编号
             entries: list[tuple[int, Any]] = []
             for index, hit in enumerate(hits, start=1):
                 paper = hit.paper
@@ -184,7 +173,6 @@ async def ask(req: AskRequest, request: Request) -> StreamingResponse:
                 },
             )
 
-            # 3) 流式生成回答
             if cfg.offline and cfg.llm.provider != "ollama":
                 yield pack("error", {"message": "离线模式下无法调用云端模型，且本地模型不可用。"})
                 yield pack("done", {"ok": False})
