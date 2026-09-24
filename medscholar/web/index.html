@@ -550,6 +550,7 @@
     <div class="modal-tabs" role="tablist">
       <button type="button" class="tab is-active" role="tab" aria-selected="true" data-mtab="runtime">运行设置</button>
       <button type="button" class="tab" role="tab" aria-selected="false" data-mtab="health">健康状态</button>
+      <button type="button" class="tab" role="tab" aria-selected="false" data-mtab="metrics">运行指标</button>
       <button type="button" class="tab" role="tab" aria-selected="false" data-mtab="maintenance">知识库维护</button>
     </div>
 
@@ -630,6 +631,20 @@
 
       <div class="modal-pane" data-mpane="health">
         <div id="healthDetail"><p class="empty-hint">加载中…</p></div>
+      </div>
+
+      <!-- 运行指标：把后端 /api/metrics 的聚合数字摊开给用户看。
+           「这次综述花了多少 token / 多少钱」「慢在哪个阶段」「后端是不是在连续失败」
+           「检索到的内容里有没有被塞进指令」—— 这四个问题的答案都在这里，
+           不需要去翻日志。账本在进程内存里，重启即清零（界面上会标出来）。 -->
+      <div class="modal-pane" data-mpane="metrics">
+        <div class="metrics-head">
+          <p class="form-help" id="metricsNote">指标来自本次服务进程，重启后清零。</p>
+          <button type="button" class="btn btn-sm" id="metricsRefreshBtn">
+            <svg class="ic ic-sm" aria-hidden="true"><use href="#i-refresh"></use></svg><span>刷新</span>
+          </button>
+        </div>
+        <div id="metricsDetail"><p class="empty-hint">加载中…</p></div>
       </div>
 
       <div class="modal-pane" data-mpane="maintenance">

@@ -59,6 +59,26 @@ EXCLUDE_FILES = {
 }
 EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".pyd.log", ".log", ".db", ".db-wal", ".db-shm"}
 
+#: **个人求职材料**，绝不进分享包。
+#:
+#: 背景：`docs/` 里混着两类东西 —— 一类是项目文档（API 契约、评测方法、架构说明），
+#: 朋友和同事都该看到；另一类是**为面试准备的材料**（简历条目、讲稿、演示脚本、
+#: 亮点清单、踩坑复盘），里面含个人经历与求职意图。
+#: 它们已经按同样的理由移出了版本控制（见 `.gitignore` 的 `docs/`），
+#: 那分享包也必须一致：把 zip 发给朋友/同学时，不该顺带把简历发出去。
+#:
+#: 用**黑名单**而不是"docs 白名单"：项目文档会继续增加（新写一份说明就该能分享），
+#: 而个人材料是有限且明确的几个文件，逐个列出反而更不容易漏。
+EXCLUDE_DOC_FILES = {
+    "RESUME.md",              # 简历条目
+    "INTERVIEW-PROJECT.md",   # 面试讲稿
+    "INTERVIEW-FAQ.md",       # 面试问答
+    "DEMO.md",                # 演示脚本
+    "HIGHLIGHTS.md",          # 亮点清单
+    "PROBLEMS-AND-STRATEGY.md",  # 踩坑复盘（含个人判断）
+    "_FACT-PACK.md",          # 写材料的内部事实包
+}
+
 #: 仅供开发/测试使用的依赖，不应进入分享包（否则体积白白翻倍）。
 #: 这些包在运行期完全用不到：pytest/ruff 是测试与 lint 工具，
 #: pygments/iniconfig/pluggy 只是它们的依赖。
@@ -81,6 +101,9 @@ def should_skip(path: Path) -> bool:
     if path.name in EXCLUDE_FILES:
         return True
     if path.suffix in EXCLUDE_SUFFIXES:
+        return True
+    # 个人求职材料（docs/ 下）：分享包里不能夹带简历与面试讲稿
+    if path.name in EXCLUDE_DOC_FILES:
         return True
     # 开发工具的可执行文件（位于 Scripts/ 下）
     if path.parent.name.lower() == "scripts" and path.stem.lower() in DEV_ONLY_SCRIPTS:

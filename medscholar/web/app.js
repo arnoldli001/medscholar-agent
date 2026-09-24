@@ -384,6 +384,8 @@ var API = {
   config: function () { return apiFetch('/api/config', { timeout: 15000 }); },
   /** GET /api/stats —— 数据库统计 */
   stats: function () { return apiFetch('/api/stats', { timeout: 15000 }); },
+  /** GET /api/metrics —— 运行指标（LLM 用量与成本 / 熔断 / 缓存命中率 / 注入扫描） */
+  metrics: function () { return apiFetch('/api/metrics', { timeout: 15000 }); },
   /** GET /api/cite/styles —— 可用引用格式 */
   citeStyles: function () { return apiFetch('/api/cite/styles', { timeout: 15000 }); },
   /** GET /api/papers —— 文献库分页/排序/过滤 */
@@ -4001,6 +4003,186 @@ function setSettingsTab(name) {
   Array.prototype.forEach.call(document.querySelectorAll('[data-mpane]'), function (p) {
     p.classList.toggle('is-active', p.getAttribute('data-mpane') === name);
   });
+  // 切到「运行指标」时才去拉数据：指标每次都变，提前拉只会显示一份过期快照，
+  // 而这个面板的用途恰恰是"我现在看到的数字是刚发生的"。
+  if (name === 'metrics') refreshMetrics({});
+}
+
+/** 拉取运行指标（/api/metrics）。失败只提示，不影响其他面板。 */
+function refreshMetrics(opts) {
+  var box = $('metricsDetail');
+  if (!box) return;
+  if (!opts || !opts.silent) {
+    clear(box);
+    box.appendChild(el('p', { class: 'empty-hint', text: '加载中…' }));
+  }
+  api.metrics().then(function (data) {
+    renderMetricsDetail(data);
+  }).catch(function (err) {
+    clear(box);
+    box.appendChild(noticeNode('error', '运行指标获取失败：' + err.message));
+  });
+}
+
+function renderMetricsDetail(m) {
+  var box = $('metricsDetail');
+  if (!box) return;
+  clear(box);
+  if (!m) { box.appendChild(noticeNode('error', '未取得运行指标。')); return; }
+  var llm = m.llm || {};
+
+  function fmtNum(n) {
+    var v = Number(n || 0);
+    return v.toLocaleString('zh-CN');
+  }
+  function fmtCost(yuan) {
+    var v = Number(yuan || 0);
+    if (!v) return '¥0（本地推理）';
+    return '¥' + (v < 0.01 ? v.toFixed(4) : v.toFixed(2));
+  }
+  function card(title, main, sub) {
+    return el('div', { class: 'metric-card' }, [
+      el('div', { class: 'metric-title', text: title }),
+      el('div', { class: 'metric-main', text: main }),
+      el('div', { class: 'metric-sub', text: sub || '' })
+    ]);
+  }
+
+  // ---- 第一排：成本与用量
+  var cards = el('div', { class: 'metrics-grid' });
+  cards.appendChild(card('LLM 调用', fmtNum(llm.calls),
+    '成功 ' + fmtNum(llm.ok_calls) + ' · 失败 ' + fmtNum(llm.failed_calls)));
+  cards.appendChild(card('Token 用量', fmtNum(llm.total_tokens),
+    '输入 ' + fmtNum(llm.prompt_tokens) + ' · 输出 ' + fmtNum(llm.completion_tokens)));
+  cards.appendChild(card('估算成本', fmtCost(llm.cost_yuan),
+    '本地模型为 0；云端按量估算'));
+  cards.appendChild(card('延迟 p50 / p95',
+    Math.round(Number(llm.latency_ms_p50 || 0)) + ' / ' + Math.round(Number(llm.latency_ms_p95 || 0)) + ' ms',
+    '慢在哪个阶段看下面'));
+  box.appendChild(cards);
+
+  // ---- 按阶段：回答"慢在哪、钱花在哪"
+  var byPhase = llm.by_phase || {};
+  var phaseKeys = Object.keys(byPhase);
+  if (phaseKeys.length) {
+    var phaseTbl = el('div', { class: 'metrics-table' });
+    phaseTbl.appendChild(el('div', { class: 'form-label', text: '按阶段' }));
+    phaseTbl.appendChild(el('div', { class: 'metrics-row metrics-row-head' }, [
+      el('span', { text: '阶段' }), el('span', { text: '调用' }),
+      el('span', { text: 'Token' }), el('span', { text: 'p95' })
+    ]));
+    phaseKeys.forEach(function (k) {
+      var item = byPhase[k] || {};
+      phaseTbl.appendChild(el('div', { class: 'metrics-row' }, [
+        el('span', { text: k || '（未标注）' }),
+        el('span', { text: fmtNum(item.calls) }),
+        el('span', { text: fmtNum(Number(item.prompt_tokens || 0) + Number(item.completion_tokens || 0)) }),
+        el('span', { text: Math.round(Number(item.latency_ms_p95 || 0)) + ' ms' })
+      ]));
+    });
+    box.appendChild(phaseTbl);
+  }
+
+  // ---- 失败分类：回答"为什么失败"
+  var byErr = llm.by_error_kind || {};
+  var errKeys = Object.keys(byErr);
+  if (errKeys.length) {
+    var errBox = el('div', { class: 'metrics-table' });
+    errBox.appendChild(el('div', { class: 'form-label', text: '失败分类（"失败 37 次"没有信息量，"429 占 30 次"才指向限流）' }));
+    errKeys.forEach(function (k) {
+      var item = byErr[k] || {};
+      errBox.appendChild(el('div', { class: 'metrics-row metrics-row-2' }, [
+        el('span', { class: 'chip chip-bad', text: k }),
+        el('span', { text: fmtNum(item.calls) + ' 次' })
+      ]));
+    });
+    box.appendChild(errBox);
+  }
+
+  // ---- 熔断器：后端是不是在连续失败
+  var breakers = m.breakers || {};
+  var breakerKeys = Object.keys(breakers);
+  if (breakerKeys.length) {
+    var brBox = el('div', { class: 'metrics-table' });
+    brBox.appendChild(el('div', { class: 'form-label', text: '模型后端熔断状态' }));
+    breakerKeys.forEach(function (k) {
+      var b = breakers[k] || {};
+      var state = String(b.state || 'closed');
+      var cls = state === 'closed' ? 'chip chip-ok' : (state === 'open' ? 'chip chip-bad' : 'chip chip-warn');
+      brBox.appendChild(el('div', { class: 'metrics-row metrics-row-2' }, [
+        el('span', { class: cls, text: state === 'closed' ? '正常' : (state === 'open' ? '熔断中' : '半开探测') }),
+        el('span', { text: k + ' · 连续失败 ' + fmtNum(b.failures) + (b.cooldown_remaining ? ' · 冷却 ' + Math.round(b.cooldown_remaining) + 's' : '') })
+      ]));
+    });
+    box.appendChild(brBox);
+  }
+
+  // ---- 缓存命中率：这个缓存到底有没有用
+  var caches = m.caches || {};
+  var cacheKeys = Object.keys(caches);
+  if (cacheKeys.length) {
+    var cBox = el('div', { class: 'metrics-table' });
+    cBox.appendChild(el('div', { class: 'form-label', text: '缓存命中率（命中率极低的缓存只是在消耗内存）' }));
+    cacheKeys.forEach(function (k) {
+      var c = caches[k] || {};
+      var rate = Math.round(Number(c.hit_rate || 0) * 100);
+      cBox.appendChild(el('div', { class: 'metrics-row metrics-row-2' }, [
+        el('span', { text: k }),
+        el('span', { text: rate + '% · 命中 ' + fmtNum(c.hits) + ' / 查询 ' + fmtNum(c.lookups) + ' · 占用 ' + fmtNum(c.size) })
+      ]));
+    });
+    box.appendChild(cBox);
+  }
+
+  // ---- 注入扫描：语料有没有被投毒
+  var inj = m.injection || {};
+  var injBox = el('div', { class: 'metrics-table' });
+  injBox.appendChild(el('div', { class: 'form-label', text: '检索内容注入扫描' }));
+  var total = Number(inj.total_findings || 0);
+  injBox.appendChild(el('div', { class: 'metrics-row metrics-row-2' }, [
+    el('span', { class: total > 0 ? 'chip chip-warn' : 'chip chip-ok', text: total > 0 ? '发现可疑指令' : '未发现' }),
+    el('span', {
+      text: total > 0
+        ? fmtNum(total) + ' 处 · 影响 ' + fmtNum(inj.blocks_with_findings) + ' 块材料（已按数据处理，不会执行）'
+        : '所有检索材料均按"不可信数据"包裹后进入提示词'
+    })
+  ]));
+  if (inj.last_finding) {
+    injBox.appendChild(el('div', { class: 'metrics-row metrics-row-2' }, [
+      el('span', { class: 'chip', text: inj.last_finding.kind || '未知' }),
+      el('span', { text: (inj.last_finding.severity || '') + ' · ' + (inj.last_finding.excerpt || '') })
+    ]));
+  }
+  box.appendChild(injBox);
+
+  // ---- 最近调用：把"刚才发生了什么"摆出来
+  var recent = m.llm_recent || [];
+  if (recent.length) {
+    var rBox = el('div', { class: 'metrics-table' });
+    rBox.appendChild(el('div', { class: 'form-label', text: '最近调用（倒序）' }));
+    recent.slice(-5).reverse().forEach(function (item) {
+      rBox.appendChild(el('div', { class: 'metrics-row metrics-row-head-4' }, [
+        el('span', { text: item.phase || '（未标注）' }),
+        el('span', { text: (item.provider || '') + '/' + (item.model || '') }),
+        el('span', { text: fmtNum(Number(item.prompt_tokens || 0) + Number(item.completion_tokens || 0)) + ' tok' }),
+        el('span', {
+          class: item.ok === false ? 'chip chip-bad' : 'chip chip-ok',
+          text: item.ok === false ? ('失败 · ' + (item.error_kind || '')) : (Math.round(Number(item.latency_ms || 0)) + ' ms')
+        })
+      ]));
+    });
+    box.appendChild(rBox);
+  }
+
+  if (!llm.calls && !cacheKeys.length && !breakerKeys.length) {
+    box.appendChild(noticeNode('warn', '还没有任何模型调用记录。发起一次研究或提问后，这里会出现 token、成本与延迟。'));
+  }
+
+  var note = $('metricsNote');
+  if (note) {
+    note.textContent = '指标来自本次服务进程（已运行 ' + Math.round(Number(m.uptime_s || 0)) +
+      ' 秒），重启后清零；不包含任何文献内容或提示词正文。';
+  }
 }
 
 function bindSettings() {
@@ -4017,6 +4199,8 @@ function bindSettings() {
   Array.prototype.forEach.call(document.querySelectorAll('[data-mtab]'), function (t) {
     t.addEventListener('click', function () { setSettingsTab(t.getAttribute('data-mtab')); });
   });
+  var metricsBtn = $('metricsRefreshBtn');
+  if (metricsBtn) metricsBtn.addEventListener('click', function () { refreshMetrics({}); });
 
   var apiBase = $('settingApiBase');
   var reqApproval = $('settingRequireApproval');

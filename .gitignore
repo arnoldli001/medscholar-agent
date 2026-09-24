@@ -9,8 +9,19 @@ dist/
 config.yaml
 .env
 
-# 本地材料（面试准备文档，含个人信息，不入版本控制）
-docs/
+# 个人求职材料（含个人信息与求职意图，不入版本控制）
+#
+# 注意这里**逐文件列出**，而不是整目录 `docs/`：
+# `docs/` 下还混着项目自身的文档（HTTP 契约、评测方法、架构说明、验证报告），
+# 那些是 README、CI 与 scripts/smoke_http.py 都在引用的东西，必须跟着仓库走 ——
+# 整目录忽略会让新克隆里出现"README 链接的文档不存在、smoke 找不到契约文档"。
+docs/RESUME.md
+docs/INTERVIEW-PROJECT.md
+docs/INTERVIEW-FAQ.md
+docs/DEMO.md
+docs/HIGHLIGHTS.md
+docs/PROBLEMS-AND-STRATEGY.md
+docs/_FACT-PACK.md
 
 # Python
 __pycache__/

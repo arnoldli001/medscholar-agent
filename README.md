@@ -23,16 +23,21 @@
 | 数据源 | **9 个官方检索源** + Unpaywall（DOI→OA 全文）· 限流/退避/自适应降速 |
 | 交付 | 自包含便携运行时，双击 `run.bat` 即用；朋友无需装 Python |
 
-**文档索引**：
+**文档索引**（随仓库分发）：
 
 | 想知道什么 | 看哪份 |
 |---|---|
-| 架构长什么样、每个选型的代价 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)（本文 [系统架构](#系统架构) 是浓缩版） |
-| "检索变好了"怎么量化 | [`docs/EVALUATION.md`](docs/EVALUATION.md) |
-| 面试怎么讲这个项目 | [`docs/INTERVIEW-PROJECT.md`](docs/INTERVIEW-PROJECT.md)、[`docs/INTERVIEW-FAQ.md`](docs/INTERVIEW-FAQ.md) |
-| 简历怎么写、怎么演示 | [`docs/RESUME.md`](docs/RESUME.md)、[`docs/DEMO.md`](docs/DEMO.md) |
-| 亮点清单 / 踩过的坑 | [`docs/HIGHLIGHTS.md`](docs/HIGHLIGHTS.md)、[`docs/PROBLEMS-AND-STRATEGY.md`](docs/PROBLEMS-AND-STRATEGY.md) |
-| HTTP 契约 | [`docs/API.md`](docs/API.md) · 脚本用法 [`scripts/README.md`](scripts/README.md) |
+| 架构长什么样、每个选型的代价 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)（本文 [系统架构](#系统架构) 是浓缩版，含 10 条 ADR） |
+| "检索变好了"怎么量化 | [`docs/EVALUATION.md`](docs/EVALUATION.md)（指标定义、消融结果、以及"这个评测不能证明什么"） |
+| HTTP 契约 | [`docs/API.md`](docs/API.md)（`scripts/smoke_http.py` 逐条核对它） |
+| 验证方法与真实缺陷记录 | [`docs/VALIDATION.md`](docs/VALIDATION.md)（历史快照，顶部有当前值对照） |
+| 脚本用法 | [`scripts/README.md`](scripts/README.md) |
+| 数据库迁移 | `python -m medscholar.db.migrate`（不带参数即只读状态查询） |
+
+> 另有一批**面试准备材料**（简历条目、讲稿、演示脚本、亮点清单、踩坑复盘）只在本机保留，
+> 按"含个人信息"的理由**不入版本控制、也不进分享包**（见 `.gitignore` 与
+> `scripts/pack_share.py` 的 `EXCLUDE_DOC_FILES`，CI 有对应断言）。
+> 所以你在仓库里看不到它们 —— 这不是漏提交。
 
 ---
 
@@ -124,7 +129,8 @@
 
 | 能力 | 实现 | 关键设计 |
 |---|---|---|
-| **可观测性** | `platform/observability.py` + `GET /api/metrics` | trace/span 树（contextvars 隔离并发任务）；**LLM 用量账本**按模型/阶段/失败类型聚合，含 token 与人民币成本（本地模型为 0）；手写分位数；**成功与失败都记账**（只统计成功会得到"平均耗时很漂亮、体验很差"的假象） |
+| **可观测性** | `platform/observability.py` + `GET /api/metrics` + 界面「设置 → 运行指标」面板 | trace/span 树（contextvars 隔离并发任务）；**LLM 用量账本**按模型/阶段/失败类型聚合，含 token 与人民币成本（本地模型为 0）；手写分位数；**成功与失败都记账**（只统计成功会得到"平均耗时很漂亮、体验很差"的假象）。指标接口只暴露聚合数字；界面面板把成本、按阶段分布、熔断状态、缓存命中率与注入扫描摊开，不必翻日志 |
+| **运行状态持久化** | `agent_runs` 表 + `run_steps` 阶段快照 | 进程重启后运行列表与详情仍可查（标记 `from_history`）；启动时把「运行中」改成 `interrupted`，避免界面上留下一条永远等待的任务；有快照即可**断点续跑**（已完成的阶段不重跑）。`tests/test_run_persistence.py` 用"新 runtime + 同一个库"模拟重启来守这条契约 |
 | **失败分类** | 11 类（timeout / rate_limited / auth / bad_request / not_found / server_error / connection / parse / context_overflow / cancelled / unknown） | **无法分类的失败等于没有告警**："失败 37 次"没有信息量，"429 占 30 次"直接指向限流 |
 | **韧性** | `platform/resilience.py` + `llm/transport.py` | 全抖动指数退避（避免多客户端重试同步化）；熔断按后端隔离、**按"调用"而非"尝试"计数**（否则一次成功恢复的调用也会留下失败记录，几次抖动就能误伤健康后端）；令牌桶允许突发同时约束平均速率；舱壁限制在飞请求数 |
 | **两类重试分离** | 传输层重试（429/5xx/网络）vs 语义层重试（JSON 不合法→回灌纠错） | 混在一起会让一次坏 JSON 连带重试网络层：云端成本 ×N、本地白等几十秒。**401 绝不重试**（重试一百次还是 401） |
@@ -983,30 +989,36 @@ ruff 的默认规则集会随版本变化（实测 0.16 的默认集已含扩展
 | 局限 | 具体表现 | 影响 |
 |---|---|---|
 | **引用核查只到 Tier 0** | 有确定性的数字/方向/过度主张/弱证据规则，但**语义蕴含**（跨语言、上位词改写）仍需 Tier 1 的 LLM 裁判；NLI 模型路径未实现 | 中文综述引英文文献时只能给"弱证据通过"，不能确认语义支持 |
-| **没有端到端可观测性** | 有 LLM 分段耗时日志，但没有 trace、token/成本核算、失败分类 | 线上问题定位靠翻日志 |
-| **单进程、单写者** | agent 跑在 `asyncio.create_task`；SQLite 单写 | 进程崩溃丢当前阶段的中间结果；不能水平扩展 |
+| **指标账本只在进程内存** | trace/用量账本/缓存统计都随进程结束清零；没有持久化趋势、没有阈值告警、没有 OTel 导出 | 只能看"本次运行"，跨天对比要靠自己记录 |
+| **单进程、单写者** | agent 跑在 `asyncio.create_task`；SQLite 单写 | 进程被杀会丢**当前阶段**的中间结果（已完成阶段与阶段快照都在库里，可续跑）；不能水平扩展 |
 | **无鉴权与多租户** | REST 全开放，无用户隔离、配额、审计 | 仅适合单机个人使用 |
 | **检索较基础** | 无 cross-encoder 重排、无 query 改写/HyDE、无多跳 | 复杂查询的召回还有提升空间 |
-| **无 prompt 版本管理 / A-B 实验** | 提示词是代码里的常量 | 改提示词无法灰度、无法归因 |
-| **无容器化 / 无 schema 迁移** | 靠 `CREATE TABLE IF NOT EXISTS`，改列会痛 | 部署与演进规范性不足 |
+| **提示词无线上 A/B 数据** | 注册表与变体机制已就位（40 条 key、`set_variant` 可切），但没有持久化实验结果、没有按流量分流 | 能归因"哪一版"，但还不能用数据证明哪一版更好 |
+| **迁移框架样本薄** | 版本表/校验和/逐步事务/备份/dry-run 都有，真实库上只跑过 2 个已发布迁移 | 复杂演进（改列、拆表）的实战验证不足 |
+| **无容器化** | 靠自包含便携运行时分发，没有 Dockerfile | 部署环境靠文档描述而不是代码固化 |
 | **CNKI 不可用** | 公开检索页改为 JS 渲染、接口 403 | 中文文献主要靠 OpenAlex + 题录导入覆盖 |
 
 ### 路线图（按投入产出排序）
 
-1. ~~**CI + pre-commit**~~ ✅ **已完成**——6 个作业，含检索质量门禁与 `.bat` 换行符守卫。
+1. ~~**CI + pre-commit**~~ ✅ **已完成**——6 个作业，含检索质量门禁、架构约束与 `.bat` 换行符守卫。
 2. ~~**RAG 评估体系**~~ ✅ **已完成**——指标 + 消融 + 阴性对照 + CI 门禁，
    方法论与偏差说明见 [`docs/EVALUATION.md`](docs/EVALUATION.md)。
 3. ~~**引用支持性（Tier 0）**~~ ✅ **已完成**——规则 + 校验器自评估 + CI 门禁。
-4. **引用支持性（Tier 1 / NLI）**（2~3 天）—— 用 NLI 模型或 LLM 裁判做真正的
+4. ~~**可观测性**~~ ✅ **已完成**——trace/span + token 与成本账本 + 11 类失败分类 +
+   `GET /api/metrics` + 界面「运行指标」面板。仍缺的是**持久化趋势与告警**（见上表）。
+5. ~~**schema 迁移**~~ ✅ **已完成**——版本表 + 校验和 + 逐步事务 + 备份 + dry-run。
+   仍缺的是**容器化**。
+6. **引用支持性（Tier 1 / NLI）**（2~3 天）—— 用 NLI 模型或 LLM 裁判做真正的
    蕴含判断，把跨语言与语义改写这两类盲区补上；并给出"忠实度"聚合指标。
-5. **可观测性**（2 天）—— OpenTelemetry 打点 + 每次运行的可视化 trace + token/成本核算 + 失败分类。
-6. **容器化 + schema 迁移**（1~2 天）—— Dockerfile 固化环境；Alembic 或轻量迁移表。
-7. **横向扩展**（1 周）—— PostgreSQL + pgvector、任务队列（Arq/Temporal）、无状态服务、语义缓存。
-8. **检索质量提升**（2~3 天）—— cross-encoder 重排、query 改写、chunk 策略消融。
-   评测框架已就位，因此每一项都能立刻给出"涨了多少"的数字。
-9. **领域专业度**（持续）—— GRADE 证据分级、PRISMA/CONSORT/STROBE 报告规范检查、
-   统计报告一致性校验。
-10. **记忆升级**—— 从"单条纠错记忆"扩展到长期研究记忆（跨会话课题上下文、期刊/审稿人偏好）。
+7. **指标持久化与告警**（1 天）—— 把账本按运行落库，给出跨天趋势与阈值告警；
+   需要多机时再换 OTel。
+8. **容器化**（0.5 天）—— Dockerfile + compose 固化环境（当前靠便携运行时，够用但不规范）。
+9. **横向扩展**（1 周）—— PostgreSQL + pgvector、任务队列（Arq/Temporal）、无状态服务、语义缓存。
+10. **检索质量提升**（2~3 天）—— cross-encoder 重排、query 改写、chunk 策略消融。
+    评测框架已就位，因此每一项都能立刻给出"涨了多少"的数字。
+11. **领域专业度**（持续）—— GRADE 证据分级、CONSORT/STROBE 报告规范检查、
+    统计报告一致性校验（PRISMA 流程数字已完成，见 `/api/prisma/flow`）。
+12. **记忆升级**—— 从"单条纠错记忆"扩展到长期研究记忆（跨会话课题上下文、期刊/审稿人偏好）。
 
 ---
 

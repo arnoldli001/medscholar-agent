@@ -220,7 +220,16 @@ jobs:
           if ($leaked) {
             throw "分享包泄漏了 data/ 内容：$($leaked -join ', ')"
           }
-          Write-Host "分享包校验通过：$($names.Count) 个文件，未包含 data/"
+          # 个人求职材料也绝不进包：docs/ 里混着项目文档与面试材料，
+          # 把 zip 发给朋友/同学时不该顺带把简历与求职意图发出去。
+          # 它们已按同样理由移出版本控制（.gitignore 的 docs/），这里保持一致。
+          $personal = @('RESUME.md', 'INTERVIEW-PROJECT.md', 'INTERVIEW-FAQ.md',
+                        'DEMO.md', 'HIGHLIGHTS.md', 'PROBLEMS-AND-STRATEGY.md', '_FACT-PACK.md')
+          $career = $names | Where-Object { $n = $_; $personal | Where-Object { $n -like "*/$_" } }
+          if ($career) {
+            throw "分享包含有个人求职材料：$($career -join ', ')"
+          }
+          Write-Host "分享包校验通过：$($names.Count) 个文件，未包含 data/ 与个人材料"
 
   # ---------------------------------------------------------------------------
   # 6) Linux 测试（实验性）

@@ -109,3 +109,50 @@ class TestSchemaStatusEndpoint:
         # 监控系统打到一个 500 会一直告警，而真实原因只是"这个库还没迁移过"。
         assert isinstance(payload, dict)
         assert "available" in payload or "current_version" in payload
+
+
+class TestMetricsPanelWiring:
+    """界面上的「运行指标」面板必须真的接到这个接口上。
+
+    为什么值得测：面板与接口之间是**字符串约定**（标签名、容器 id、请求路径）。
+    任何一端改名都不会报错 —— 界面上只会静静显示"加载中…"或空白，
+    而"指标确实是 0"和"接口没接上"在屏幕上长得一模一样。
+    这类断裂靠人眼 review 基本抓不住，所以用测试钉住三件事：
+    ① 首页有那个标签页；② 有对应容器；③ 前端真的去请求 /api/metrics。
+    """
+
+    async def test_index_has_metrics_tab_and_container(self, client):
+        response = await client.get("/")
+        assert response.status_code == 200
+        html = response.text
+        assert 'data-mtab="metrics"' in html, "设置弹窗里缺少「运行指标」标签"
+        assert 'data-mpane="metrics"' in html, "缺少对应的面板容器"
+        assert 'id="metricsDetail"' in html, "缺少渲染容器（前端会找不到挂载点）"
+
+    async def test_frontend_actually_calls_the_endpoint(self, client):
+        response = await client.get("/static/app.js")
+        assert response.status_code == 200
+        script = response.text
+        assert "/api/metrics" in script, "前端没有请求 /api/metrics —— 面板会是空的"
+        assert "function refreshMetrics" in script
+        assert "function renderMetricsDetail" in script
+
+    async def test_panel_renders_every_section_the_endpoint_returns(self, client):
+        """接口返回的每个区块，前端都要有对应的渲染分支。
+
+        漏渲染一个区块的后果不是报错，而是**那个数字永远不出现在界面上** ——
+        例如熔断状态没渲染，用户就只能等到失败才发现后端在熔断。
+        """
+        payload = (await client.get("/api/metrics")).json()
+        script = (await client.get("/static/app.js")).text
+        section_to_marker = {
+            "llm": "llm.by_phase",
+            "breakers": "m.breakers",
+            "caches": "m.caches",
+            "injection": "m.injection",
+            "llm_recent": "m.llm_recent",
+        }
+        for section in payload:
+            marker = section_to_marker.get(section)
+            if marker:
+                assert marker in script, f"接口返回 {section}，但前端没有渲染它（找不到 {marker}）"

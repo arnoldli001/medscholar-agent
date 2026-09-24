@@ -77,6 +77,11 @@ MODULE_LAYERS: dict[str, str] = {
     # platform
     "medscholar.platform": "platform",
     "medscholar.config": "platform",
+    # `constants` 是**跨切常量表**（只依赖标准库，被所有层引用）。
+    # 它放在包根、文件名不带层级含义；不显式归类的话校验器会按"包根"处理，
+    # 于是所有 import 它的模块都被误报成"依赖 root" —— 实测一次报了 12 条假违规。
+    # 归到 platform 才符合它的真实角色：谁都依赖它，它不依赖谁。
+    "medscholar.constants": "platform",
     # domain
     "medscholar.domain": "domain",
     "medscholar.models": "domain",
