@@ -224,7 +224,8 @@ jobs:
           # 把 zip 发给朋友/同学时不该顺带把简历与求职意图发出去。
           # 它们已按同样理由移出版本控制（.gitignore 的 docs/），这里保持一致。
           $personal = @('RESUME.md', 'INTERVIEW-PROJECT.md', 'INTERVIEW-FAQ.md',
-                        'DEMO.md', 'HIGHLIGHTS.md', 'PROBLEMS-AND-STRATEGY.md', '_FACT-PACK.md')
+                        'INTERVIEW-PACK-3ROLES.md', 'DEMO.md', 'HIGHLIGHTS.md',
+                        'PROBLEMS-AND-STRATEGY.md', '_FACT-PACK.md')
           $career = $names | Where-Object { $n = $_; $personal | Where-Object { $n -like "*/$_" } }
           if ($career) {
             throw "分享包含有个人求职材料：$($career -join ', ')"

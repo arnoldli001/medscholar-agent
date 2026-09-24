@@ -73,6 +73,7 @@ EXCLUDE_DOC_FILES = {
     "RESUME.md",              # 简历条目
     "INTERVIEW-PROJECT.md",   # 面试讲稿
     "INTERVIEW-FAQ.md",       # 面试问答
+    "INTERVIEW-PACK-3ROLES.md",  # 三岗位作战包（含个人求职意图与自我评估）
     "DEMO.md",                # 演示脚本
     "HIGHLIGHTS.md",          # 亮点清单
     "PROBLEMS-AND-STRATEGY.md",  # 踩坑复盘（含个人判断）
