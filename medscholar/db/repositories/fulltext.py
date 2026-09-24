@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from ...constants import FIELD_FULLTEXT_ERROR_MAX
 from ..connect import Database
 from ...models import Paper
 from ._common import _db, _fts_sync
@@ -92,7 +93,7 @@ def record_fulltext_attempt(
             "ON CONFLICT(paper_id) DO UPDATE SET "
             "  attempts = attempts + 1, last_error = excluded.last_error, "
             "  permanent = excluded.permanent, checked_at = datetime('now')",
-            (paper_id, (error or "")[:500], 1 if permanent else 0),
+            (paper_id, (error or "")[:FIELD_FULLTEXT_ERROR_MAX], 1 if permanent else 0),
         )
 
 

@@ -25,6 +25,14 @@ from typing import Any, Sequence
 
 from . import __version__
 from .config import get_config
+from .constants import (
+    BROWSER_OPEN_DELAY,
+    HEALTH_PROBE_TIMEOUT,
+    HTTP_DEFAULT_TIMEOUT,
+    PORT_POLL_INTERVAL,
+    PORT_READY_TIMEOUT,
+    PORT_SOCKET_TIMEOUT,
+)
 
 __all__ = ["main", "build_parser"]
 
@@ -60,7 +68,7 @@ def _source_badge(status: dict[str, Any]) -> str:
     return f"{label}=失败"
 
 
-def _wait_for_port(host: str, port: int, timeout: float = 40.0) -> bool:
+def _wait_for_port(host: str, port: int, timeout: float = PORT_READY_TIMEOUT) -> bool:
     """轮询直到端口真的开始接受连接，再开浏览器。
 
     不要用固定 sleep：早期实现 ``threading.Timer(1.5, open)``，但 uvicorn
@@ -74,20 +82,20 @@ def _wait_for_port(host: str, port: int, timeout: float = 40.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.5)
+            sock.settimeout(PORT_SOCKET_TIMEOUT)
             if sock.connect_ex((target, port)) == 0:
                 return True
-        time.sleep(0.2)
+        time.sleep(PORT_POLL_INTERVAL)
     return False
 
 
 def _open_browser_when_ready(url: str, host: str, port: int) -> None:
-    """等端口就绪后再打开浏览器（就绪后额外留 0.4s 让 uvicorn 稳定）。"""
+    """等端口就绪后再打开浏览器（就绪后短暂等待 uvicorn 稳定）。"""
     import time
     import webbrowser
 
     if _wait_for_port(host, port):
-        time.sleep(0.4)
+        time.sleep(BROWSER_OPEN_DELAY)
         webbrowser.open(url)
         print(f"  已在浏览器中打开 {url}")
     else:
@@ -192,7 +200,9 @@ async def _doctor_async(args: argparse.Namespace) -> int:
     print("\n[LLM 后端]")
     try:
         llm = get_llm(cfg)
-        ok, message = await asyncio.wait_for(llm.health(), timeout=60.0)
+        ok, message = await asyncio.wait_for(
+            llm.health(), timeout=HEALTH_PROBE_TIMEOUT
+        )
         line(f"{cfg.llm.provider}", ok, message)
         if not ok:
             problems.append(
@@ -204,9 +214,9 @@ async def _doctor_async(args: argparse.Namespace) -> int:
     except (asyncio.TimeoutError, TimeoutError):
         # 坑：asyncio.TimeoutError 的 str 是空串，f"LLM 探测失败：{exc}" 会输出
         # "LLM 探测失败："后面什么都没有，无法判断发生了什么。
-        line(cfg.llm.provider, False, "探测超时（60 秒无响应）")
+        line(cfg.llm.provider, False, f"探测超时（{HEALTH_PROBE_TIMEOUT:.0f} 秒无响应）")
         problems.append(
-            "LLM 探测超时（60 秒无响应）。\n"
+            f"LLM 探测超时（{HEALTH_PROBE_TIMEOUT:.0f} 秒无响应）。\n"
             f"      → 本地模型：{cfg.llm.model} 可能正在冷加载（实测 8B 模型要 20~35 秒），"
             "或 Ollama 正被其他程序占用\n"
             "      → 先手动确认一次：ollama run "
@@ -221,7 +231,9 @@ async def _doctor_async(args: argparse.Namespace) -> int:
     print("\n[嵌入后端]")
     try:
         provider = get_provider(cfg)
-        ok, message = await asyncio.wait_for(provider.probe(), timeout=60.0)
+        ok, message = await asyncio.wait_for(
+            provider.probe(), timeout=HEALTH_PROBE_TIMEOUT
+        )
         line(f"{provider.name}/{provider.model}", ok, message)
         if not ok:
             problems.append(
@@ -233,7 +245,9 @@ async def _doctor_async(args: argparse.Namespace) -> int:
         line(cfg.embedding.provider, False, str(exc))
 
     print("\n[学术数据源]")
-    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=HTTP_DEFAULT_TIMEOUT, follow_redirects=True
+    ) as client:
         probes = [
             ("PubMed", "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=rTMS&retmax=1&retmode=json"),
             ("Europe PMC", "https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=rTMS&format=json&pageSize=1"),

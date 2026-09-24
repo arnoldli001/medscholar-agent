@@ -470,6 +470,9 @@ class Span:
         }
 
 
+#: span 错误文本只留一行摘要：完整堆栈进日志，trace 树要序列化发前端，不能被长异常撑爆
+_SPAN_ERROR_MAX = 500
+
 # 当前 trace / span 栈用 ContextVar 而非全局变量/threading.local：同一事件循环的
 # 多个 asyncio 任务共享线程，全局/线程局部变量区分不开，并发任务（多源检索、批量摘要）
 # 会互相把对方的 span 当成父节点；跨事件循环时全局变量还会直接泄漏。
@@ -514,7 +517,7 @@ class TraceRecorder:
             node.end = time.monotonic()
             node.status = "error"
             # 只留一行短的错误文本：完整堆栈进日志，span 树里留摘要足够定位
-            node.error = f"{type(exc).__name__}: {exc}"[:500]
+            node.error = f"{type(exc).__name__}: {exc}"[:_SPAN_ERROR_MAX]
             node.attrs.setdefault("error_kind", classify_failure(exc))
             raise
         else:

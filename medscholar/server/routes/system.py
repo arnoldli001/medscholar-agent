@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from ... import __version__
 from ...api import ALL_SOURCES
+from ...constants import HEALTH_PROBE_CACHE_SECONDS
 from ...embedding.pipeline import embedding_status
 from ...llm.client import get_llm
 from ..deps import WEB_DIR, get_config, get_db, get_registry, render_index
@@ -59,7 +60,7 @@ def _schedule_probe(force: bool) -> None:
     task = probe_task["task"]
     if task is not None and not task.done():
         return
-    if not force and probe_cache["at"] and time.time() - probe_cache["at"] < 120.0:
+    if not force and probe_cache["at"] and time.time() - probe_cache["at"] < HEALTH_PROBE_CACHE_SECONDS:
         return
     probe_task["task"] = asyncio.create_task(_run_probes(), name="health-probe")
 

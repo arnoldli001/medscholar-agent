@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from ..config import AppConfig, get_config
+from ..constants import EMBED_QUERY_CACHE_SIZE, EMBED_QUERY_CACHE_TTL
 from ..db.connect import Database, get_db
 # 直接依赖子模块而非 db.repo 门面，让依赖图/架构校验看到真实边界。
 from ..db.repositories.embeddings import papers_missing_embeddings, store_embeddings
@@ -257,7 +258,9 @@ async def embed_query(
     if not text:
         return None
     provider = _get_provider(config)
-    cache = cache_registry("embed_query", ttl=3600.0, maxsize=256)
+    cache = cache_registry(
+        "embed_query", ttl=EMBED_QUERY_CACHE_TTL, maxsize=EMBED_QUERY_CACHE_SIZE
+    )
     cache_key = f"{provider.name}|{provider.model}|{text}"
 
     cached_vector = cache.get(cache_key)

@@ -14,7 +14,12 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from .config import AppConfig, get_config
-from .constants import LLM_MAX_TOKENS_MANUSCRIPT, LLM_TEMPERATURE_MANUSCRIPT
+from .constants import (
+    FIELD_MANUSCRIPT_TITLE_MAX,
+    LLM_MAX_TOKENS_MANUSCRIPT,
+    LLM_TEMPERATURE_MANUSCRIPT,
+    PROVENANCE_SENTENCE_MAX,
+)
 from .db.connect import Database
 from .db.repo import _db
 from .llm.client import LLMError, get_llm
@@ -75,7 +80,7 @@ class NumberCheck:
             "in_user_data": self.in_user_data,
             "in_literature": self.in_literature,
             "ok": self.ok,
-            "sentence": self.sentence[:200],
+            "sentence": self.sentence[:PROVENANCE_SENTENCE_MAX],
         }
 
 
@@ -381,13 +386,16 @@ def save_manuscript(
             conn.execute(
                 "UPDATE manuscripts SET title = ?, brief = ?, draft = ?, checks = ?, "
                 "  updated_at = datetime('now') WHERE id = ?",
-                (title[:500], brief_json, draft, checks_json, int(manuscript_id)),
+                (
+                    title[:FIELD_MANUSCRIPT_TITLE_MAX],
+                    brief_json, draft, checks_json, int(manuscript_id),
+                ),
             )
             return int(manuscript_id)
         cursor = conn.execute(
             "INSERT INTO manuscripts(session_id, title, brief, draft, checks) "
             "VALUES (?, ?, ?, ?, ?)",
-            (session_id, title[:500], brief_json, draft, checks_json),
+            (session_id, title[:FIELD_MANUSCRIPT_TITLE_MAX], brief_json, draft, checks_json),
         )
         return int(cursor.lastrowid or 0)
 

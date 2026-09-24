@@ -10,6 +10,7 @@ import sqlite3
 import struct
 from typing import Any, Sequence
 
+from ...constants import SQL_IN_CHUNK
 from ..connect import Database
 from ._common import _db
 
@@ -110,7 +111,7 @@ def papers_missing_embeddings(
     )
     params: list[Any] = []
     if ids:
-        chunk_ids = list(ids)[:900]
+        chunk_ids = list(ids)[:SQL_IN_CHUNK]
         marks = ",".join("?" for _ in chunk_ids)
         sql += f" AND p.paper_id IN ({marks})"
         params.extend(chunk_ids)

@@ -5,6 +5,12 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping, Sequence
 
+from ...constants import (
+    FIELD_ARTIFACT_TITLE_MAX,
+    FIELD_RUN_ERROR_MAX,
+    FIELD_TOPIC_MAX,
+    RUNS_LIST_LIMIT,
+)
 from ..connect import Database
 from ._common import _db
 
@@ -52,8 +58,10 @@ def upsert_run(
             "  papers = excluded.papers, citations = excluded.citations, "
             "  artifact_id = COALESCE(excluded.artifact_id, agent_runs.artifact_id), "
             "  error = excluded.error, updated_at = datetime('now')",
-            (run_id, session_id, topic[:500], phase, status, papers, citations,
-             artifact_id, (error or "")[:1000]),
+            (
+                run_id, session_id, topic[:FIELD_TOPIC_MAX], phase, status, papers,
+                citations, artifact_id, (error or "")[:FIELD_RUN_ERROR_MAX],
+            ),
         )
 
 
@@ -62,7 +70,7 @@ def get_run(run_id: str, *, db: Database | None = None) -> dict[str, Any] | None
     return dict(row) if row else None
 
 
-def list_runs(*, limit: int = 30, db: Database | None = None) -> list[dict[str, Any]]:
+def list_runs(*, limit: int = RUNS_LIST_LIMIT, db: Database | None = None) -> list[dict[str, Any]]:
     rows = _db(db).query(
         "SELECT r.*, a.title AS artifact_title, a.fmt AS artifact_fmt "
         "FROM agent_runs r LEFT JOIN artifacts a ON a.id = r.artifact_id "
@@ -196,13 +204,13 @@ def save_artifact(
             conn.execute(
                 "UPDATE artifacts SET title = ?, content = ?, kind = ?, fmt = ?, meta = ?, "
                 "updated_at = datetime('now') WHERE id = ?",
-                (title[:300], content, kind, fmt, payload, artifact_id),
+                (title[:FIELD_ARTIFACT_TITLE_MAX], content, kind, fmt, payload, artifact_id),
             )
             return artifact_id
         cur = conn.execute(
             "INSERT INTO artifacts(session_id, kind, title, content, fmt, meta) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (session_id, kind, title[:300], content, fmt, payload),
+            (session_id, kind, title[:FIELD_ARTIFACT_TITLE_MAX], content, fmt, payload),
         )
         return int(cur.lastrowid or 0)
 

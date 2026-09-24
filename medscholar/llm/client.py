@@ -15,7 +15,14 @@ from typing import Any, AsyncIterator, Mapping, Sequence
 
 import httpx
 
-from ..constants import HTTP_CONNECT_TIMEOUT
+from ..constants import (
+    HEALTH_REPLY_PREVIEW,
+    HTTP_CONNECT_TIMEOUT,
+    JSON_CORRECTION_CONTEXT,
+    LLM_JSON_RETRIES,
+    LLM_MAX_TOKENS_HEALTH,
+    LLM_TEMPERATURE_JSON_DEFAULT,
+)
 from ..platform.config import AppConfig, LLMSettings, get_config
 from ..platform.observability import (
     LEDGER,
@@ -218,7 +225,7 @@ class LLMClient(OllamaBackend, OpenAIBackend):
         system: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        retries: int = 2,
+        retries: int = LLM_JSON_RETRIES,
         expect: str = "object",
     ) -> Any:
         """要求 JSON 并容错解析；解析失败或顶层形状不符合 expect 时把错误回灌模型重试
@@ -229,7 +236,7 @@ class LLMClient(OllamaBackend, OpenAIBackend):
             text = await self.chat(
                 history,
                 system=system,
-                temperature=temperature if temperature is not None else 0.1,
+                temperature=temperature if temperature is not None else LLM_TEMPERATURE_JSON_DEFAULT,
                 max_tokens=max_tokens,
                 json_mode=True,
             )
@@ -240,7 +247,7 @@ class LLMClient(OllamaBackend, OpenAIBackend):
                 logger.debug("JSON 解析失败（第 %d 次），要求模型重试", attempt + 1)
                 history = [
                     *history,
-                    {"role": "assistant", "content": text[:1500]},
+                    {"role": "assistant", "content": text[:JSON_CORRECTION_CONTEXT]},
                     {
                         "role": "user",
                         "content": (
@@ -279,14 +286,14 @@ class LLMClient(OllamaBackend, OpenAIBackend):
             await self.start()
             text = await self.chat(
                 [{"role": "user", "content": "回复两个字：可用"}],
-                max_tokens=16,
+                max_tokens=LLM_MAX_TOKENS_HEALTH,
                 temperature=0.0,
             )
         except LLMError as exc:
             return False, str(exc)
         except Exception as exc:  # pragma: no cover
             return False, f"{type(exc).__name__}: {exc}"
-        return True, f"{self.settings.provider}/{self.settings.model} 可用（回复：{text.strip()[:20]}）"
+        return True, f"{self.settings.provider}/{self.settings.model} 可用（回复：{text.strip()[:HEALTH_REPLY_PREVIEW]}）"
 
 
 # --------------------------------------------------------------- 全局单例

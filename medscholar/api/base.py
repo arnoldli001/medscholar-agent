@@ -18,7 +18,12 @@ from typing import Any, Mapping
 import httpx
 
 from ..config import AppConfig, SourceSettings, get_config
-from ..constants import HTTP_CONNECT_TIMEOUT
+from ..constants import (
+    HTTP_CONNECT_TIMEOUT,
+    HTTP_ERROR_SNIPPET,
+    HTTP_POOL_MAX_CONNECTIONS,
+    HTTP_POOL_MAX_KEEPALIVE,
+)
 from ..models import Paper
 
 logger = logging.getLogger(__name__)
@@ -143,7 +148,10 @@ class BaseClient(ABC):
                 timeout=httpx.Timeout(self.settings.timeout, connect=HTTP_CONNECT_TIMEOUT),
                 headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
                 follow_redirects=True,
-                limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
+                limits=httpx.Limits(
+                    max_connections=HTTP_POOL_MAX_CONNECTIONS,
+                    max_keepalive_connections=HTTP_POOL_MAX_KEEPALIVE,
+                ),
             )
             self._owns_client = True
             self._client_loop = asyncio.get_running_loop()
@@ -230,7 +238,7 @@ class BaseClient(ABC):
             if response.status_code >= 400:
                 raise SourceError(
                     self.name,
-                    f"HTTP {response.status_code}：{response.text[:200]}",
+                    f"HTTP {response.status_code}：{response.text[:HTTP_ERROR_SNIPPET]}",
                     status=response.status_code,
                 )
 

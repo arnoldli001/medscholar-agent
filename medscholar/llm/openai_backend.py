@@ -12,6 +12,7 @@ import logging
 import time
 from typing import Any, AsyncIterator
 
+from ..constants import HTTP_ERROR_SNIPPET, LLM_ERROR_SNIPPET
 from .errors import LLMError
 from .transport import failure_kind, http_error_kind, run_with_resilience
 
@@ -75,7 +76,7 @@ class OpenAIBackend:
                 error_kind=http_error_kind(response.status_code),
             )
             raise LLMError(
-                f"{self.settings.provider} 返回 HTTP {response.status_code}：{response.text[:300]}"
+                f"{self.settings.provider} 返回 HTTP {response.status_code}：{response.text[:LLM_ERROR_SNIPPET]}"
             )
         data = response.json()
         usage = data.get("usage") or {}
@@ -86,7 +87,7 @@ class OpenAIBackend:
         )
         choices = data.get("choices") or []
         if not choices:
-            raise LLMError(f"{self.settings.provider} 未返回 choices：{str(data)[:200]}")
+            raise LLMError(f"{self.settings.provider} 未返回 choices：{str(data)[:HTTP_ERROR_SNIPPET]}")
 
         choice = choices[0]
         message = choice.get("message") or {}
@@ -151,7 +152,7 @@ class OpenAIBackend:
                 )
                 raise LLMError(
                     f"{self.settings.provider} 返回 HTTP {response.status_code}："
-                    f"{body.decode('utf-8', 'replace')[:300]}"
+                    f"{body.decode('utf-8', 'replace')[:LLM_ERROR_SNIPPET]}"
                 )
             async for line in response.aiter_lines():
                 line = line.strip()

@@ -48,6 +48,14 @@ _ALIASES = {
     "ris": "ris",
 }
 
+# 各著录标准的作者列出上限：GB/T 7714 列前 3 名加"等"，Vancouver 列前 6 名加 et al.；
+# APA/Chicago 列前 20 名，超出时保留前 19 名 + 末位作者（中间用省略号）。
+_GB7714_AUTHOR_LIMIT = 3
+_VANCOUVER_AUTHOR_LIMIT = 6
+_APA_AUTHOR_LIMIT = 20
+#: RIS AB 字段摘要上限（EndNote/NoteExpress 等导入器对单字段长度敏感）
+_RIS_ABSTRACT_MAX = 4000
+
 
 def detect_style(name: str | None, *, default: str = "gb7714") -> str:
     """把用户输入的样式名归一化。"""
@@ -113,30 +121,30 @@ def format_authors(
         return "佚名" if language.startswith("zh") or style == "gb7714" else "Anonymous"
 
     if style == "gb7714":
-        shown = names[:3]
+        shown = names[:_GB7714_AUTHOR_LIMIT]
         rendered = [str(n).strip() for n in shown]
         text = ", ".join(rendered)
-        return text + (", 等" if len(names) > 3 else "")
+        return text + (", 等" if len(names) > _GB7714_AUTHOR_LIMIT else "")
 
     if style == "vancouver":
-        shown = names[:6]
+        shown = names[:_VANCOUVER_AUTHOR_LIMIT]
         rendered = []
         for name in shown:
             family, given = split_author(name)
             initials = _initials(given, sep="", join="")
             rendered.append(f"{family} {initials}".strip())
         text = ", ".join(rendered)
-        return text + ", et al." if len(names) > 6 else text
+        return text + ", et al." if len(names) > _VANCOUVER_AUTHOR_LIMIT else text
 
     if style in {"apa7", "chicago"}:
-        limit = 20
+        limit = _APA_AUTHOR_LIMIT
         rendered = []
         for name in names[:limit]:
             family, given = split_author(name)
             initials = _initials(given)
             rendered.append(f"{family}, {initials}".strip().rstrip(",") if initials else family)
         if len(names) > limit:
-            rendered = rendered[:19] + ["…", rendered[-1]]
+            rendered = rendered[: limit - 1] + ["…", rendered[-1]]
         if len(rendered) == 1:
             return rendered[0]
         return ", ".join(rendered[:-1]) + ", & " + rendered[-1]
@@ -438,7 +446,7 @@ def to_ris(paper: Paper) -> str:
     if paper.url:
         lines.append(f"UR  - {paper.url}")
     if paper.abstract:
-        lines.append("AB  - " + paper.abstract.replace("\n", " ")[:4000])
+        lines.append("AB  - " + paper.abstract.replace("\n", " ")[:_RIS_ABSTRACT_MAX])
     for keyword in paper.keywords:
         lines.append(f"KW  - {keyword}")
     if paper.note:

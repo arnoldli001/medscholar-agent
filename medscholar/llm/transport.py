@@ -52,8 +52,7 @@ def breaker_for(key: str) -> CircuitBreaker:
     避免局部故障升级成整个 LLM 不可用。"""
     breaker = _BREAKERS.get(key)
     if breaker is None:
-        # 阈值 5：单次失败常见，连续 5 次才判定后端真坏；冷却 30s 等重启/限流窗口过去。
-        breaker = CircuitBreaker(f"llm:{key}", failure_threshold=5, reset_timeout=30.0)
+        breaker = CircuitBreaker(f"llm:{key}")
         _BREAKERS[key] = breaker
     return breaker
 

@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from ...constants import DB_BUSY_TIMEOUT_MS, DB_CONNECTION_TIMEOUT
 from .base import Migration, MigrationError
 from .registry import MIGRATIONS
 
@@ -58,11 +59,11 @@ def _resolve_path(raw: str | None) -> Path:
 
 def _connect(path: Path) -> sqlite3.Connection:
     """CLI 专用连接：开 WAL/外键但不加载 sqlite-vec（迁移只做 DDL，少一个扩展依赖）。"""
-    conn = sqlite3.connect(str(path), timeout=30.0, isolation_level=None)
+    conn = sqlite3.connect(str(path), timeout=DB_CONNECTION_TIMEOUT, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA busy_timeout = 15000")
+    conn.execute(f"PRAGMA busy_timeout = {DB_BUSY_TIMEOUT_MS}")
     return conn
 
 

@@ -19,6 +19,7 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 from .api import SearchFilters, search_all
 from .cite import STYLE_LABELS, detect_style, format_records, format_reference_list
 from .config import get_config
+from .constants import DEFAULT_REFERENCE_LIMIT, TOOL_RESULT_TEXT_MAX
 from .db import (
     get_paper,
     get_papers_by_ids,
@@ -186,11 +187,13 @@ async def _fetch_fulltext(paper_id: int) -> dict[str, Any]:
         "paper_id": paper_id,
         "origin": result.origin,
         "char_count": len(result.content),
-        "text": result.content[:20000],
+        "text": result.content[:TOOL_RESULT_TEXT_MAX],
     }
 
 
-async def _fetch_references(paper_id: int, limit: int = 50) -> dict[str, Any]:
+async def _fetch_references(
+    paper_id: int, limit: int = DEFAULT_REFERENCE_LIMIT
+) -> dict[str, Any]:
     """获取某篇文献的参考文献（Europe PMC / Crossref / S2 自动择优）。"""
     paper = get_paper(int(paper_id))
     if paper is None:

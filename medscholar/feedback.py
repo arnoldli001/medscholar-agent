@@ -15,6 +15,23 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from .constants import (
+    FEEDBACK_LIST_LIMIT,
+    FIELD_COMMENT_MAX,
+    FIELD_CORRECTED_MAX,
+    FIELD_QUOTED_MAX,
+    FIELD_RUN_ID_MAX,
+    FIELD_TARGET_ID_MAX,
+    FIELD_TARGET_TYPE_MAX,
+    FIELD_TOPIC_MAX,
+    MEMORY_CANDIDATE_FACTOR,
+    MEMORY_COMMENT_MAX,
+    MEMORY_CORRECTED_MAX,
+    MEMORY_FEWSHOT_LIMIT,
+    MEMORY_QUOTED_MAX,
+    MEMORY_TOPIC_KEYWORD,
+    PREFERENCE_EXPORT_LIMIT,
+)
 from .db.connect import Database
 from .db.repo import _db  # 复用统一的数据库句柄解析
 
@@ -94,16 +111,16 @@ def record_feedback(
             "                    category, comment, corrected_text, quoted_text, topic) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                (entry.target_type or "message")[:32],
-                str(entry.target_id or "")[:128],
-                str(entry.run_id or "")[:64],
+                (entry.target_type or "message")[:FIELD_TARGET_TYPE_MAX],
+                str(entry.target_id or "")[:FIELD_TARGET_ID_MAX],
+                str(entry.run_id or "")[:FIELD_RUN_ID_MAX],
                 entry.session_id,
                 verdict,
                 category,
-                (entry.comment or "")[:4000],
-                (entry.corrected_text or "")[:20000],
-                (entry.quoted_text or "")[:4000],
-                (entry.topic or "")[:500],
+                (entry.comment or "")[:FIELD_COMMENT_MAX],
+                (entry.corrected_text or "")[:FIELD_CORRECTED_MAX],
+                (entry.quoted_text or "")[:FIELD_QUOTED_MAX],
+                (entry.topic or "")[:FIELD_TOPIC_MAX],
             ),
         )
         return int(cursor.lastrowid or 0)
@@ -114,7 +131,7 @@ def list_feedback(
     run_id: str = "",
     session_id: int | None = None,
     target_type: str = "",
-    limit: int = 100,
+    limit: int = FEEDBACK_LIST_LIMIT,
     db: Database | None = None,
 ) -> list[FeedbackEntry]:
     """按条件列出反馈（最近的在前）。"""
@@ -197,7 +214,7 @@ def feedback_summary(*, db: Database | None = None, limit: int = 5000) -> dict[s
 def correction_memories(
     *,
     topic: str = "",
-    limit: int = 5,
+    limit: int = MEMORY_FEWSHOT_LIMIT,
     db: Database | None = None,
 ) -> list[dict[str, str]]:
     """取出可作为 few-shot 记忆的纠错（即时生效的闭环）。
@@ -211,11 +228,11 @@ def correction_memories(
     )
     params: list[Any] = []
     order = " ORDER BY id DESC LIMIT ?"
-    rows = _db(db).query(sql + order, (*params, int(limit) * 4))
+    rows = _db(db).query(sql + order, (*params, int(limit) * MEMORY_CANDIDATE_FACTOR))
 
     same_topic: list[dict[str, str]] = []
     others: list[dict[str, str]] = []
-    needle = (topic or "").strip()[:60]
+    needle = (topic or "").strip()[:MEMORY_TOPIC_KEYWORD]
     for row in rows:
         item = {
             "topic": row["topic"] or "",
@@ -235,7 +252,9 @@ def correction_memories(
     return picked
 
 
-def memories_as_prompt(topic: str = "", *, limit: int = 5, db: Database | None = None) -> str:
+def memories_as_prompt(
+    topic: str = "", *, limit: int = MEMORY_FEWSHOT_LIMIT, db: Database | None = None
+) -> str:
     """把纠错记忆渲染成可直接拼进提示词的文本；无记忆返回空串，
     调用方据此决定是否插入，避免无谓的提示词膨胀。
     """
@@ -248,17 +267,17 @@ def memories_as_prompt(topic: str = "", *, limit: int = 5, db: Database | None =
     for index, item in enumerate(items, start=1):
         lines.append(f"{index}. 问题类型：{item['category'] or '未分类'}")
         if item["quoted_text"]:
-            lines.append(f"   错误原文：「{item['quoted_text'][:200]}」")
+            lines.append(f"   错误原文：「{item['quoted_text'][:MEMORY_QUOTED_MAX]}」")
         if item["comment"]:
-            lines.append(f"   用户说明：{item['comment'][:300]}")
-        lines.append(f"   正确说法：{item['corrected_text'][:600]}")
+            lines.append(f"   用户说明：{item['comment'][:MEMORY_COMMENT_MAX]}")
+        lines.append(f"   正确说法：{item['corrected_text'][:MEMORY_CORRECTED_MAX]}")
     return "\n".join(lines)
 
 
 # ======================================================= 2) 偏好对导出
 def export_preference_pairs(
     *,
-    limit: int = 1000,
+    limit: int = PREFERENCE_EXPORT_LIMIT,
     db: Database | None = None,
 ) -> list[dict[str, Any]]:
     """导出 DPO 风格偏好对。

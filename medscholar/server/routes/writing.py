@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ...cite import STYLE_LABELS, STYLES, detect_style
+from ...constants import DIGEST_MAX_ABSTRACT_MANUSCRIPT
 from ...db import repo
 from ...db.repositories.search import search_log_summary
 from ...export.exporters import EXPORT_FORMATS, export_csv, export_json
@@ -162,7 +163,9 @@ async def manuscript_draft(req: ManuscriptRequest) -> dict[str, Any]:
                 (index, hit.paper) for index, hit in enumerate(hits, start=1)
             ]
             if entries:
-                literature_text = build_context_digest(entries, max_abstract=600)
+                literature_text = build_context_digest(
+                    entries, max_abstract=DIGEST_MAX_ABSTRACT_MANUSCRIPT
+                )
         except Exception as exc:  # 文献材料拿不到不该阻断写作
             logger.warning("检索本地文献材料失败：%s", exc)
 

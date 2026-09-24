@@ -34,11 +34,20 @@ __all__ = [
     "LLM_MAX_TOKENS_PLAN",
     "LLM_MAX_TOKENS_MANUSCRIPT",
     "LLM_MAX_TOKENS_CAP",
+    "LLM_TEMPERATURE_JSON_DEFAULT",
+    "LLM_JSON_RETRIES",
+    "LLM_MAX_TOKENS_HEALTH",
+    "LLM_TEMPERATURE_JUDGE",
+    "LLM_TEMPERATURE_JUDGE_SC",
+    "LLM_MAX_TOKENS_JUDGE",
+    "JSON_CORRECTION_CONTEXT",
+    "HEALTH_REPLY_PREVIEW",
     # 文本裁剪上限
     "ABSTRACT_TRUNCATE_DETECT",
     "ABSTRACT_TRUNCATE_SAMPLE",
     "DIGEST_MAX_ABSTRACT_OUTLINE",
     "DIGEST_MAX_ABSTRACT_CRITIQUE",
+    "DIGEST_MAX_ABSTRACT_MANUSCRIPT",
     "DIGEST_MAX_ABSTRACT_REVIEW",
     "DIGEST_MAX_ABSTRACT_REVISE",
     "DRAFT_TRUNCATE_REVIEW",
@@ -50,6 +59,58 @@ __all__ = [
     "TITLE_TRUNCATE_SUGGESTION",
     "FEEDBACK_TRUNCATE",
     "ERROR_TRUNCATE_LLM",
+    "DRAFT_TRUNCATE_ABSTRACT",
+    "HTML_SNIFF_BYTES",
+    "FORMAT_SNIFF_BYTES",
+    "TOOL_RESULT_TEXT_MAX",
+    "PROVENANCE_SENTENCE_MAX",
+    "JUDGE_EVIDENCE_MAX",
+    "JUDGE_REASON_MAX",
+    "JUDGE_MAX_CLAIMS",
+    "EVENT_PAPERS_PREVIEW_CAP",
+    "RECENT_SEARCHES_LIMIT",
+    "SQL_IN_CHUNK",
+    # 错误片段截断
+    "HTTP_ERROR_SNIPPET",
+    "LLM_ERROR_SNIPPET",
+    "JSON_ERROR_SNIPPET",
+    # 写库字段长度上限
+    "FIELD_TOPIC_MAX",
+    "FIELD_MANUSCRIPT_TITLE_MAX",
+    "FIELD_TARGET_TYPE_MAX",
+    "FIELD_TARGET_ID_MAX",
+    "FIELD_RUN_ID_MAX",
+    "FIELD_COMMENT_MAX",
+    "FIELD_CORRECTED_MAX",
+    "FIELD_QUOTED_MAX",
+    "FIELD_RUN_ERROR_MAX",
+    "FIELD_ARTIFACT_TITLE_MAX",
+    "FIELD_SESSION_TITLE_MAX",
+    "FIELD_CITATION_MAX",
+    "FIELD_FULLTEXT_ERROR_MAX",
+    # 反馈记忆
+    "FEEDBACK_LIST_LIMIT",
+    "PREFERENCE_EXPORT_LIMIT",
+    "MEMORY_FEWSHOT_LIMIT",
+    "MEMORY_CANDIDATE_FACTOR",
+    "MEMORY_TOPIC_KEYWORD",
+    "MEMORY_QUOTED_MAX",
+    "MEMORY_COMMENT_MAX",
+    "MEMORY_CORRECTED_MAX",
+    # 韧性 / 连接池 / 缓存
+    "HTTP_POOL_MAX_CONNECTIONS",
+    "HTTP_POOL_MAX_KEEPALIVE",
+    "EMBED_QUERY_CACHE_TTL",
+    "EMBED_QUERY_CACHE_SIZE",
+    "EMBED_TIMEOUT_MARGIN_SECONDS",
+    # 健康探测 / CLI
+    "HEALTH_PROBE_TIMEOUT",
+    "HEALTH_PROBE_CACHE_SECONDS",
+    "PORT_READY_TIMEOUT",
+    "PORT_POLL_INTERVAL",
+    "PORT_SOCKET_TIMEOUT",
+    "BROWSER_OPEN_DELAY",
+    "HTTP_DEFAULT_TIMEOUT",
     # 评分阈值（Critic 启发式）
     "SCORE_MAX",
     "SAMPLE_EXTRACT_MIN",
@@ -178,6 +239,8 @@ ABSTRACT_TRUNCATE_SAMPLE: int = 4000
 DIGEST_MAX_ABSTRACT_OUTLINE: int = 280
 #: LLM 评估时材料摘要长度
 DIGEST_MAX_ABSTRACT_CRITIQUE: int = 600
+#: 论文写作时材料摘要长度
+DIGEST_MAX_ABSTRACT_MANUSCRIPT: int = 600
 #: 自我审查时材料摘要长度
 DIGEST_MAX_ABSTRACT_REVIEW: int = 400
 #: 自动修订时材料摘要长度
@@ -336,3 +399,114 @@ DEFAULT_SEARCH_LIMIT: int = 20
 DEFAULT_TOP_K: int = 20
 #: 引用获取默认条数
 DEFAULT_REFERENCE_LIMIT: int = 50
+
+# ============================================================ LLM 容错 / 裁判
+#: chat_json 未显式指定温度时的默认值（结构化输出要稳定）
+LLM_TEMPERATURE_JSON_DEFAULT: float = 0.1
+#: chat_json 解析失败后的纠错重试次数
+LLM_JSON_RETRIES: int = 2
+#: 健康自检只需几个字
+LLM_MAX_TOKENS_HEALTH: int = 16
+#: 引用支持性裁判（Tier 1）温度
+LLM_TEMPERATURE_JUDGE: float = 0.1
+#: 自洽性复核温度：略高以争取独立判断、暴露不一致
+LLM_TEMPERATURE_JUDGE_SC: float = 0.7
+#: 裁判单次回复 token 上限
+LLM_MAX_TOKENS_JUDGE: int = 400
+#: 纠错重试时回灌的坏输出长度（够模型看到自己错在哪即可）
+JSON_CORRECTION_CONTEXT: int = 1500
+#: 健康信息里模型回复预览长度
+HEALTH_REPLY_PREVIEW: int = 20
+
+# ============================================================ 内容截断（补充）
+#: 摘要生成时喂入的草稿长度
+DRAFT_TRUNCATE_ABSTRACT: int = 6000
+#: 判定响应体是不是 HTML 页面时嗅探的字节数
+HTML_SNIFF_BYTES: int = 200
+#: 题录文件格式识别的采样长度
+FORMAT_SNIFF_BYTES: int = 4096
+#: MCP 工具返回正文的长度上限
+TOOL_RESULT_TEXT_MAX: int = 20000
+#: 数字溯源报告中句子字段的长度上限
+PROVENANCE_SENTENCE_MAX: int = 200
+#: 裁判证据片段 / 理由的长度上限
+JUDGE_EVIDENCE_MAX: int = 500
+JUDGE_REASON_MAX: int = 300
+#: 单次 Tier 1 裁判的论断条数上限（控成本）
+JUDGE_MAX_CLAIMS: int = 40
+#: 文献事件推给前端的预览条数（完整列表走分页接口）
+EVENT_PAPERS_PREVIEW_CAP: int = 40
+#: 热门检索词统计回看的最近检索条数
+RECENT_SEARCHES_LIMIT: int = 200
+#: IN 子句单批 id 数（SQLite 旧版变量上限 999，留余量）
+SQL_IN_CHUNK: int = 900
+
+# ============================================================ 错误片段截断
+#: HTTP 数据源报错时摘取的响应体长度
+HTTP_ERROR_SNIPPET: int = 200
+#: LLM 后端报错时摘取的响应体长度
+LLM_ERROR_SNIPPET: int = 300
+#: JSON 解析失败时摘取的模型输出长度
+JSON_ERROR_SNIPPET: int = 400
+
+# ============================================================ 写库字段长度上限
+#: 课题长度（feedback.topic / agent_runs.topic）
+FIELD_TOPIC_MAX: int = 500
+#: 论文标题长度（manuscripts.title）
+FIELD_MANUSCRIPT_TITLE_MAX: int = 500
+FIELD_TARGET_TYPE_MAX: int = 32
+FIELD_TARGET_ID_MAX: int = 128
+FIELD_RUN_ID_MAX: int = 64
+#: 用户评论 / 引用原文 / 正确说法
+FIELD_COMMENT_MAX: int = 4000
+FIELD_QUOTED_MAX: int = 4000
+FIELD_CORRECTED_MAX: int = 20000
+#: 运行失败信息（agent_runs.error）
+FIELD_RUN_ERROR_MAX: int = 1000
+#: 产物标题 / 会话标题
+FIELD_ARTIFACT_TITLE_MAX: int = 300
+FIELD_SESSION_TITLE_MAX: int = 200
+#: 外部引用标识 / 引用标题
+FIELD_CITATION_MAX: int = 400
+#: 全文获取失败原因
+FIELD_FULLTEXT_ERROR_MAX: int = 500
+
+# ============================================================ 反馈记忆
+#: 反馈列表默认条数
+FEEDBACK_LIST_LIMIT: int = 100
+#: 偏好对导出默认条数
+PREFERENCE_EXPORT_LIMIT: int = 1000
+#: few-shot 记忆条数
+MEMORY_FEWSHOT_LIMIT: int = 5
+#: 取候选时的放大倍数（优先同主题后仍要凑够条数）
+MEMORY_CANDIDATE_FACTOR: int = 4
+#: 同主题匹配用的课题关键词长度
+MEMORY_TOPIC_KEYWORD: int = 60
+#: few-shot 文本中各字段的长度
+MEMORY_QUOTED_MAX: int = 200
+MEMORY_COMMENT_MAX: int = 300
+MEMORY_CORRECTED_MAX: int = 600
+
+# ============================================================ 连接池 / 缓存
+#: 数据源 httpx 连接池大小
+HTTP_POOL_MAX_CONNECTIONS: int = 8
+HTTP_POOL_MAX_KEEPALIVE: int = 4
+#: 查询嵌入结果缓存（query 文本重复率高，值得缓存）
+EMBED_QUERY_CACHE_TTL: float = 3600.0
+EMBED_QUERY_CACHE_SIZE: int = 256
+#: 嵌入请求在配置超时之外额外预留的时间（覆盖排队/建连）
+EMBED_TIMEOUT_MARGIN_SECONDS: float = 30.0
+
+# ============================================================ 健康探测 / CLI
+#: doctor 对 LLM/嵌入后端的探测超时（本地模型冷加载要留足）
+HEALTH_PROBE_TIMEOUT: float = 60.0
+#: /api/health 后台探测结果的缓存时长
+HEALTH_PROBE_CACHE_SECONDS: float = 120.0
+#: 启动时等待端口就绪的轮询参数
+PORT_READY_TIMEOUT: float = 40.0
+PORT_POLL_INTERVAL: float = 0.2
+PORT_SOCKET_TIMEOUT: float = 0.5
+#: 端口就绪后延迟开浏览器，等 uvicorn 稳定
+BROWSER_OPEN_DELAY: float = 0.4
+#: 一次性 HTTP 客户端的默认总超时（doctor 探测公开数据源）
+HTTP_DEFAULT_TIMEOUT: float = 20.0

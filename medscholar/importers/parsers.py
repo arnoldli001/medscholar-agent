@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from ..constants import FORMAT_SNIFF_BYTES
 from ..models import Paper, coerce_int
 
 logger = logging.getLogger(__name__)
@@ -622,7 +623,7 @@ def parse_csv(text: str, *, default_source: str = "import") -> list[Paper]:
     if not body.strip():
         return []
 
-    sample = body[:4096]
+    sample = body[:FORMAT_SNIFF_BYTES]
     try:
         dialect = csv.Sniffer().sniff(sample, delimiters=",\t;")
     except csv.Error:

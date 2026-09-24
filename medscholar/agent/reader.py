@@ -15,6 +15,7 @@ import httpx
 from ..config import AppConfig, get_config
 from ..constants import (
     BODY_TRUNCATE_SUMMARY,
+    HTML_SNIFF_BYTES,
     LLM_TEMPERATURE_SUMMARY,
     PDF_CONNECT_TIMEOUT,
     PDF_DOWNLOAD_TIMEOUT,
@@ -254,7 +255,9 @@ class ReaderAgent:
                 return FullTextResult(paper_id, error=error)
 
             # 落地页而非 PDF：从 HTML 的 citation_pdf_url 找真 PDF 地址重试
-            if not data[:PDF_MAGIC_BYTES].startswith(b"%PDF") and ("html" in content_type or data[:200].lstrip()[:1] == b"<"):
+            is_pdf = data[:PDF_MAGIC_BYTES].startswith(b"%PDF")
+            looks_html = "html" in content_type or data[:HTML_SNIFF_BYTES].lstrip()[:1] == b"<"
+            if not is_pdf and looks_html:
                 try:
                     html = data.decode("utf-8", "replace")
                 except Exception:  # pragma: no cover

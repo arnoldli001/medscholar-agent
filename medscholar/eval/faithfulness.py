@@ -15,6 +15,15 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
+from ..constants import (
+    JUDGE_EVIDENCE_MAX,
+    JUDGE_MAX_CLAIMS,
+    JUDGE_REASON_MAX,
+    LLM_MAX_TOKENS_JUDGE,
+    LLM_TEMPERATURE_JUDGE,
+    LLM_TEMPERATURE_JUDGE_SC,
+)
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -564,7 +573,7 @@ async def verify_claims_llm(
     sources: Mapping[int, str],
     *,
     config: Any = None,
-    max_claims: int = 40,
+    max_claims: int = JUDGE_MAX_CLAIMS,
     self_consistency: bool = False,
 ) -> dict[int, ClaimVerdict]:
     """Tier 1：LLM 逐条核查，返回 {claim 下标: ClaimVerdict}。
@@ -585,8 +594,8 @@ async def verify_claims_llm(
             payload = await client.chat_json(
                 [{"role": "user", "content": prompt}],
                 system=_JUDGE_SYSTEM,
-                temperature=0.1,
-                max_tokens=400,
+                temperature=LLM_TEMPERATURE_JUDGE,
+                max_tokens=LLM_MAX_TOKENS_JUDGE,
                 retries=1,
             )
         except LLMError as exc:
@@ -602,8 +611,8 @@ async def verify_claims_llm(
             claim=claim,
             verdict={"partial": "overclaim"}.get(verdict, verdict),
             tier="tier1",
-            evidence=str(payload.get("evidence") or "")[:500],
-            reason=str(payload.get("reason") or "")[:300],
+            evidence=str(payload.get("evidence") or "")[:JUDGE_EVIDENCE_MAX],
+            reason=str(payload.get("reason") or "")[:JUDGE_REASON_MAX],
         )
 
         if self_consistency:
@@ -611,8 +620,8 @@ async def verify_claims_llm(
                 again = await client.chat_json(
                     [{"role": "user", "content": prompt}],
                     system=_JUDGE_SYSTEM,
-                    temperature=0.7,
-                    max_tokens=400,
+                    temperature=LLM_TEMPERATURE_JUDGE_SC,
+                    max_tokens=LLM_MAX_TOKENS_JUDGE,
                     retries=0,
                 )
                 second = str((again or {}).get("verdict") or "").strip().lower()

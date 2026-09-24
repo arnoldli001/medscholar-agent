@@ -15,6 +15,7 @@ from typing import Sequence
 import httpx
 
 from ..config import AppConfig, EmbeddingSettings, get_config
+from ..constants import EMBED_TIMEOUT_MARGIN_SECONDS, HTTP_ERROR_SNIPPET
 
 logger = logging.getLogger(__name__)
 
@@ -108,13 +109,13 @@ class OllamaEmbedding(EmbeddingProvider):
             async with self._client() as client:
                 response = await asyncio.wait_for(
                     client.post("/api/embed", json=payload),
-                    timeout=self.settings.timeout + 30.0,
+                    timeout=self.settings.timeout + EMBED_TIMEOUT_MARGIN_SECONDS,
                 )
                 if response.status_code == 404:
                     # 旧版 Ollama 没有 /api/embed，退回 /api/embeddings（单条）
                     return await self._embed_legacy(client, texts)
                 if response.status_code >= 400:
-                    detail = response.text[:200]
+                    detail = response.text[:HTTP_ERROR_SNIPPET]
                     installed = await self._list_models_with(client)
                     hint = ""
                     if installed and self.settings.model not in installed:
@@ -128,7 +129,7 @@ class OllamaEmbedding(EmbeddingProvider):
                 data = response.json()
         except asyncio.TimeoutError as exc:
             raise RuntimeError(
-                f"Ollama 嵌入超时（{self.settings.timeout + 30:.0f}s）。"
+                f"Ollama 嵌入超时（{self.settings.timeout + EMBED_TIMEOUT_MARGIN_SECONDS:.0f}s）。"
                 "可能是模型过大或并发过高，可调小 embedding.batch_size。"
             ) from exc
         except httpx.TransportError as exc:
@@ -139,7 +140,7 @@ class OllamaEmbedding(EmbeddingProvider):
 
         vectors = data.get("embeddings")
         if not vectors:
-            raise RuntimeError(f"Ollama 未返回 embeddings 字段：{str(data)[:200]}")
+            raise RuntimeError(f"Ollama 未返回 embeddings 字段：{str(data)[:HTTP_ERROR_SNIPPET]}")
         return [list(map(float, v)) for v in vectors]
 
     async def _list_models_with(self, client: httpx.AsyncClient) -> list[str]:

@@ -17,6 +17,7 @@ from ..constants import (
     DIGEST_MAX_ABSTRACT_REVISE,
     DRAFT_TRUNCATE_REVIEW,
     DRAFT_TRUNCATE_REVISE,
+    EVENT_PAPERS_PREVIEW_CAP,
     FEEDBACK_TRUNCATE,
     LLM_MAX_TOKENS_PLAN,
     LLM_MAX_TOKENS_REVIEW,
@@ -346,7 +347,7 @@ class ResearchGraph:
             emit,
             "papers",
             count=len(state.papers),
-            items=[p.to_dict() for p in state.papers[:40]],
+            items=[p.to_dict() for p in state.papers[:EVENT_PAPERS_PREVIEW_CAP]],
         )
 
         # 为最相关的 OA 文献预取全文，供写作时深度引用

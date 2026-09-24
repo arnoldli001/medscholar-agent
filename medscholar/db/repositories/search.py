@@ -11,6 +11,7 @@ import sqlite3
 from typing import Any, Mapping, Sequence
 
 from ...config import get_config
+from ...constants import RECENT_SEARCHES_LIMIT
 from ..connect import Database
 from ...models import ScoredPaper, SearchLogEntry
 from ...textutil import build_match_query
@@ -331,7 +332,9 @@ def search_log_summary(
         "total_new": sum(int(r["new_count"] or 0) for r in rows),
         "total_searches": sum(int(r["searches"] or 0) for r in rows),
         "failures": sum(int(r["failures"] or 0) for r in rows),
-        "queries": sorted({str(r["query"]) for r in recent_searches(limit=200, db=db)})
+        "queries": sorted(
+            {str(r["query"]) for r in recent_searches(limit=RECENT_SEARCHES_LIMIT, db=db)}
+        )
         if not queries
         else list(queries),
     }

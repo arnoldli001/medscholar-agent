@@ -13,6 +13,7 @@ from typing import Any, AsyncIterator, Mapping
 
 import httpx
 
+from ..constants import HTTP_ERROR_SNIPPET, LLM_ERROR_SNIPPET
 from .errors import LLMError
 from .transport import failure_kind, http_error_kind, run_with_resilience
 
@@ -164,7 +165,7 @@ class OllamaBackend:
                     error_kind=http_error_kind(response.status_code),
                 )
                 raise LLMError(
-                    f"Ollama 返回 HTTP {response.status_code}：{body.decode('utf-8', 'replace')[:200]}"
+                    f"Ollama 返回 HTTP {response.status_code}：{body.decode('utf-8', 'replace')[:HTTP_ERROR_SNIPPET]}"
                 )
             async for line in response.aiter_lines():
                 if not line.strip():
@@ -194,7 +195,7 @@ class OllamaBackend:
             "num_ctx": self.settings.num_ctx,
         }
     async def _ollama_error(self, response: httpx.Response) -> str:
-        detail = response.text[:300]
+        detail = response.text[:LLM_ERROR_SNIPPET]
         try:
             available = (await self.client.get("/api/tags")).json().get("models", [])
             names = [m.get("name", "") for m in available]

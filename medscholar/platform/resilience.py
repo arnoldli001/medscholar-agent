@@ -135,6 +135,11 @@ class CircuitOpenError(RuntimeError):
         super().__init__(f"[{name}] 熔断已打开，约 {self.retry_after:.1f}s 后允许探测")
 
 
+#: 熔断默认参数：连续失败 5 次打开，冷却 30 秒后半开探测
+CIRCUIT_DEFAULT_FAILURE_THRESHOLD = 5
+CIRCUIT_DEFAULT_RESET_SECONDS = 30.0
+
+
 class CircuitBreaker:
     """按数据源计数的熔断器（CLOSED / OPEN / HALF_OPEN）。
 
@@ -152,8 +157,8 @@ class CircuitBreaker:
         self,
         name: str,
         *,
-        failure_threshold: int = 5,
-        reset_timeout: float = 30.0,
+        failure_threshold: int = CIRCUIT_DEFAULT_FAILURE_THRESHOLD,
+        reset_timeout: float = CIRCUIT_DEFAULT_RESET_SECONDS,
         half_open_max_calls: int = 1,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:

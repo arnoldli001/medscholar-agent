@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from ...constants import FIELD_CITATION_MAX
 from ..connect import Database
 from ._common import _db
 
@@ -63,8 +64,8 @@ def add_citations(
                 (
                     citing_paper_id,
                     local_id,
-                    str(external)[:400] if external else None,
-                    (ref.get("title") or "")[:400] or None,
+                    str(external)[:FIELD_CITATION_MAX] if external else None,
+                    (ref.get("title") or "")[:FIELD_CITATION_MAX] or None,
                     source,
                 ),
             )

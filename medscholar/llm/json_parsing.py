@@ -12,6 +12,7 @@ import json
 import re
 from typing import Any
 
+from ..constants import JSON_ERROR_SNIPPET
 from .errors import LLMError
 
 __all__ = ["extract_json"]
@@ -46,7 +47,7 @@ def extract_json(text: str, *, expect: str = "any") -> Any:
 
     want = {"object": "JSON 对象", "array": "JSON 数组"}.get(expect, "JSON")
     detail = f"（{last_error}）" if last_error else ""
-    raise LLMError(f"无法从模型输出中解析出{want}{detail}：{text[:400]}")
+    raise LLMError(f"无法从模型输出中解析出{want}{detail}：{text[:JSON_ERROR_SNIPPET]}")
 
 
 def _matches(value: Any, expect: str) -> bool:

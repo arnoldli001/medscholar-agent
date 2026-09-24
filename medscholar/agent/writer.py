@@ -17,6 +17,7 @@ from ..constants import (
     CITATION_RANGE_MAX_SPAN,
     DEFAULT_SECTION_COUNT,
     DIGEST_MAX_ABSTRACT_OUTLINE,
+    DRAFT_TRUNCATE_ABSTRACT,
     LLM_MAX_TOKENS_ABSTRACT,
     LLM_MAX_TOKENS_OUTLINE,
     LLM_MAX_TOKENS_SUMMARY,
@@ -275,7 +276,7 @@ class WriterAgent:
                         {
                             "role": "user",
                             "content": (
-                                f"综述课题：{topic}\n\n草稿内容：\n{draft[:6000]}\n\n"
+                                f"综述课题：{topic}\n\n草稿内容：\n{draft[:DRAFT_TRUNCATE_ABSTRACT]}\n\n"
                                 "请输出 200~300 字的结构式摘要。"
                             ),
                         }

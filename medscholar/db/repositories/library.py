@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping, Sequence
 
+from ...constants import FIELD_SESSION_TITLE_MAX
 from ..connect import Database
 from ...models import Paper
 from ._common import _db
@@ -150,7 +151,7 @@ def create_session(
     with database.transaction() as conn:
         cur = conn.execute(
             "INSERT INTO chat_sessions(title, project_id, topic) VALUES (?, ?, ?)",
-            (title[:200], project_id, topic),
+            (title[:FIELD_SESSION_TITLE_MAX], project_id, topic),
         )
         return int(cur.lastrowid or 0)
 
@@ -175,7 +176,7 @@ def rename_session(session_id: int, title: str, *, db: Database | None = None) -
     with database.transaction() as conn:
         cur = conn.execute(
             "UPDATE chat_sessions SET title = ?, updated_at = datetime('now') WHERE id = ?",
-            (title[:200], session_id),
+            (title[:FIELD_SESSION_TITLE_MAX], session_id),
         )
         return (cur.rowcount or 0) > 0
 
