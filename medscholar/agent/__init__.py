@@ -1,13 +1,11 @@
 """Agent 层：六智能体协作 + 四节点工作流。
 
-============ ==========================================================
-Orchestrator :mod:`~medscholar.agent.graph` —— 编排四节点工作流
-Scout        :mod:`~medscholar.agent.scout` —— 多源并发检索与入库
-Reader       :mod:`~medscholar.agent.reader` —— 开放获取全文解析与速读
-Critic       :mod:`~medscholar.agent.critic` —— 证据质量与相关性评估
-Writer       :mod:`~medscholar.agent.writer` —— 综述与摘要生成
-Formatter    :mod:`~medscholar.agent.formatter` —— 引用格式与校验
-============ ==========================================================
+- Orchestrator：:mod:`~medscholar.agent.graph` —— 编排四节点工作流
+- Scout：:mod:`~medscholar.agent.scout` —— 多源并发检索与入库
+- Reader：:mod:`~medscholar.agent.reader` —— 开放获取全文解析与速读
+- Critic：:mod:`~medscholar.agent.critic` —— 证据质量与相关性评估
+- Writer：:mod:`~medscholar.agent.writer` —— 综述与摘要生成
+- Formatter：:mod:`~medscholar.agent.formatter` —— 引用格式与校验
 
 运行时（后台执行 + SSE 事件流 + 人工审批）见
 :mod:`~medscholar.agent.runtime`。

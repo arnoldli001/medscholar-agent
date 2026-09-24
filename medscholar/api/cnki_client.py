@@ -1,29 +1,25 @@
-"""CNKI 公开检索客户端（**默认关闭 · 尽力而为 · 仅元数据**）。
+"""CNKI 公开检索客户端（默认关闭，仅元数据）。
 
-.. warning::
-   **实测结论（2026-02 复核）**：``search.cnki.com.cn`` 的检索结果页已改为
-   **纯前端 JS 渲染**。服务端返回的 HTML（约 39 KB）中只有检索表单与页脚，
-   不含任何文献条目；其数据接口 ``/Search/ListResult`` 与
-   ``kns.cnki.net/kns8/defaultresult/index`` 均直接返回 **HTTP 403**。
-   因此**在不引入浏览器渲染的前提下无法稳定获取 CNKI 元数据**。
+2026-02 复核结论：search.cnki.com.cn 结果页已改为纯前端 JS 渲染，
+服务端 HTML（约 39 KB）不含文献条目；数据接口返回 HTTP 403。
+不引入浏览器渲染就无法稳定获取元数据。
 
-   本模块因此默认 ``enabled: false``，并在被调用时抛出携带明确处置建议的
-   :class:`SourceError`，而不是静默返回空结果。
+本模块默认 ``enabled: false``，被调用时抛 :class:`SourceError`
+并给出替代方案，不静默返回空结果。
 
 合规边界：
 
-* 只访问面向公众开放的检索页，**不登录、不绕过任何付费墙、不破解验证码**；
-* 只提取标题、作者、期刊、年份、摘要、关键词等**元数据**；
+* 只访问公开检索页，不登录、不绕过付费墙、不破解验证码；
+* 只提取标题、作者、期刊、年份、摘要、关键词等元数据；
 * 不下载、不缓存、不再分发任何全文；全文请通过机构合法授权获取。
 
-如需重新启用，有三种正当途径：
+如需重新启用：
 
-1. 配置 ``sources.cnki.base_url`` 指向**你自己**部署的渲染服务
-   （例如 Playwright/Puppeteer 渲染 ``Search/Result`` 后返回 HTML）；
+1. 配置 ``sources.cnki.base_url`` 指向你自己部署的渲染服务；
 2. 使用机构订阅的 CNKI 官方接口/镜像（需自行取得授权）；
-3. 直接使用经实测可用的替代通路（推荐）：
-   * ``OpenAlexClient`` 的 ``language:zh`` 过滤 —— 实测可返回真实中文文献
-   * ``PubMedClient`` 的 ``chinese[la]`` 过滤 —— 收录于 PubMed 的中文刊
+3. 直接用替代通路（推荐）：
+   * ``OpenAlexClient`` 的 ``language:zh`` 过滤
+   * ``PubMedClient`` 的 ``chinese[la]`` 过滤
    * ``CrossrefClient`` —— 注册了 DOI 的中文期刊
 """
 

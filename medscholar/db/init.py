@@ -145,7 +145,7 @@ init = init_database
 
 
 def reset_database(*, config: AppConfig | None = None, confirm: bool = False) -> Path:
-    """删除并重建数据库文件（**会丢失全部数据**）。返回被删除的路径。"""
+    """删除并重建数据库文件（会丢失全部数据）。返回被删除的路径。"""
     cfg = config or get_config()
     path = cfg.db_path
     if not confirm:

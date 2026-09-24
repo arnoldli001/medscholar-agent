@@ -1,12 +1,9 @@
 """Agent 运行时：后台运行、事件流与人机审批。
 
-为什么需要这一层：需求里的 **Plan → 用户审批** 是一个真正的暂停点。
-如果直接在 HTTP 请求里 await，客户端一断线整个任务就没了。因此这里
-
-* 把工作流跑在**后台 task** 里；
-* 所有事件按顺序追加到 ``history``，并用一个 ``asyncio.Event`` 唤醒订阅者
-  —— 事件列表是**唯一事实来源**，因此断线重连可以完整补播，也不会丢事件；
-* 审批用一个 ``Future`` 表示，由 ``POST /api/agent/approve/{run_id}`` 兑现。
+需求里的 Plan → 用户审批是一个真正的暂停点；直接在 HTTP 请求里 await，
+客户端一断线整个任务就没了。因此工作流跑在后台 task 里：事件按顺序追加到
+``history``，断线重连可完整补播；审批用一个 ``Future`` 表示，由
+``POST /api/agent/approve/{run_id}`` 兑现。
 """
 
 from __future__ import annotations
@@ -78,10 +75,10 @@ def normalize_review_chars(
     """把界面传来的字数范围夹到合理区间，并保证 min < max。
 
     兜底规则（不信任前端）：范围缺失或为 0 时用配置默认值；上下限颠倒时交换；
-    越界时夹到 800~40000 字——比 800 还短写不出综述，比 4 万字一次本地
-    生成不现实（8B 本地模型约 45 tok/s，4 万字要跑很久）。
+    越界时夹到 800~40000 字——比 800 短写不出综述，4 万字以上对 8B 本地模型
+    不现实（约 45 tok/s，要跑很久）。
 
-    **总是返回具体的有效区间**，调用方可以直接使用。
+    返回值总是有效区间，调用方可直接使用。
     """
     low = int(min_chars) if min_chars else 0
     high = int(max_chars) if max_chars else 0
@@ -106,9 +103,9 @@ def normalize_review_chars(
 def looks_like_placeholder(topic: str) -> bool:
     """判断课题是否其实是界面上的占位提示文本。
 
-    实测出现过课题为「例如：加速rTMS治疗卒中后抑郁的疗效与安全性」——
-    正是前端输入框的 placeholder 原文（可能来自浏览器 autofill 或粘贴）。
-    前端已做防御；这里再做一道，因为 CLI 与 MCP 也走同一个入口。
+    实测出现过课题为「例如：加速rTMS治疗卒中后抑郁的疗效与安全性」，
+    即前端输入框的 placeholder 原文（可能来自浏览器 autofill 或粘贴）。
+    前端已做防御；CLI 与 MCP 也走同一个入口，这里再挡一道。
 
     >>> looks_like_placeholder("例如：rTMS 治疗抑郁")
     True
@@ -254,8 +251,8 @@ class AgentRuntime:
     async def resume(self, run_id: str) -> RunHandle:
         """从已保存的阶段快照继续一次被中断的运行。
 
-        只会重跑"没做完"的阶段：规划/检索/评估/撰写/审查中已经完成的直接复用。
-        这也是用户最需要的：检索和撰写很贵，不能因为一次连接断开就全部重来。
+        只重跑没做完的阶段：规划/检索/评估/撰写/审查中已经完成的直接复用。
+        检索和撰写很贵，不能因为一次连接断开就全部重来。
         """
         row = await asyncio.to_thread(db_get_run, run_id, db=self.db)
         if not row:
@@ -514,10 +511,9 @@ class AgentRuntime:
     ) -> AsyncIterator[AgentEvent]:
         """产出事件流：先补播历史，再实时跟随，直到 ``done``。
 
-        实现说明：这里刻意**不用** ``asyncio.Event`` 做唤醒 —— Event/Future
-        都会绑定到创建它的那个事件循环，一旦运行时被跨循环访问（测试里同时
-        跑 ASGITransport 与 uvicorn、或未来接入多进程）就会静默死锁。
-        改为按 200ms 轮询历史列表，代价可以忽略，但彻底消除了这类隐患。
+        不用 ``asyncio.Event`` 做唤醒：Event/Future 会绑定到创建它的事件循环，
+        运行时被跨循环访问（测试里同时跑 ASGITransport 与 uvicorn，或多进程）
+        会静默死锁。改为按 200ms 轮询历史列表，代价可忽略。
         """
         handle = self._runs.get(run_id)
         if handle is None:

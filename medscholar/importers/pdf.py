@@ -1,19 +1,15 @@
 """PDF 解析基础设施（PyMuPDF 适配 + 落地页 PDF 定位 + 失败归类）。
 
-## 为什么这些函数从 ``agent/reader.py`` 搬到这里
+这些函数原在 ``agent/reader.py``，属于基础设施关注点（调用第三方 PDF 库、
+解析 HTML 元信息、把错误字符串归类），不是智能体的决策逻辑。
+原来 ``importers/__init__.py``（Zotero 附件导入需要读 PDF）不得不在函数体里
+``from ..agent.reader import extract_pdf_text``，形成了一条
+基础设施反向依赖应用层的隐藏耦合（懒加载 import，人工 review 很难发现）。
+这条违规是 ``scripts/check_arch.py`` 跑出来的。
 
-它们是**基础设施关注点**（调用第三方 PDF 库、解析 HTML 元信息、把错误字符串归类），
-而不是智能体的决策逻辑。原来是写在 Reader Agent 里的，结果
-``importers/__init__.py``（Zotero 附件导入需要读 PDF）不得不在函数体里
-``from ..agent.reader import extract_pdf_text`` —— 一条**基础设施反向依赖应用层**的
-隐藏耦合，靠人工 review 几乎不可能发现（它是个懒加载 import）。
-
-这条违规是 ``scripts/check_arch.py`` 跑出来的，不是人看出来的。
-搬到这里之后依赖方向就正了：``application`` → ``infrastructure``（允许），
-反向的那条被架构校验永久堵住。
-
-放在 ``importers/`` 下而不是新开一个包：导入器与 Reader 都需要它，
-而它本身没有业务语义，属于"把外部格式转成文本"这一类适配器。
+搬到 ``importers/`` 后依赖方向就正了：application → infrastructure。
+放在这里而不是新开一个包：导入器与 Reader 都需要它，而它本身没有业务语义，
+属于"把外部格式转成文本"这一类适配器。
 """
 
 from __future__ import annotations
@@ -153,8 +149,8 @@ _PDF_HREF_RE = re.compile(r"""href\s*=\s*["']([^"']+\.pdf(?:\?[^"']*)?)["']""", 
 def extract_pdf_url(html: str, base_url: str) -> str:
     """从文章落地页里找出真正的 PDF 地址。
 
-    很多数据源（OpenAlex / Crossref）给出的 ``full_text_url`` 其实是**文章网页**
-    而不是 PDF。直接下载网页当然拿不到 PDF —— 实测这一条占失败原因的 27%。
+    很多数据源（OpenAlex / Crossref）给出的 ``full_text_url`` 其实是文章网页
+    而不是 PDF，直接下载网页当然拿不到——实测这一条占失败原因的 27%。
 
     出版商为了被学术搜索收录，普遍会在页面里声明标准的
     ``<meta name="citation_pdf_url">``（Google Scholar 规范）。用它定位 PDF

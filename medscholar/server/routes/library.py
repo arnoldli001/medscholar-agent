@@ -1,6 +1,6 @@
 """会话、课题与维护路由：``tags=["会话"]`` + ``tags=["课题"]`` + ``tags=["维护"]``。
 
-三者归在同一个 router，是因为它们都是**围绕本地库的组织与保养**：会话/消息
+三者归在同一个 router，是因为它们都是围绕本地库的组织与保养：会话/消息
 记录对话现场，课题把文献分组，维护接口负责嵌入补齐、开放获取全文补齐、FTS 优化与
 VACUUM。它们都不触发 LLM 生成（全文补齐只抓开放获取正文，绝不绕过付费墙）。
 """
@@ -120,9 +120,9 @@ async def maintenance_embed(req: EmbedRequest) -> dict[str, Any]:
 
 @router.post("/api/maintenance/fulltext", tags=["维护"])
 async def maintenance_fulltext(req: FulltextBackfillRequest) -> dict[str, Any]:
-    """为**开放获取**文献补齐全文（Europe PMC JATS → PMC → OA PDF）。
+    """为开放获取文献补齐全文（Europe PMC JATS → PMC → OA PDF）。
 
-    默认入库的是元数据与摘要，不含全文 —— 这是刻意的：
+    默认入库的是元数据与摘要，不含全文——这是刻意的：
     全文体积大、抓取慢，而且只有开放获取文献才允许保存。
     用户需要全文检索或更深入的综述引用时，用本接口按需补齐。
     """
@@ -149,7 +149,7 @@ async def maintenance_fulltext(req: FulltextBackfillRequest) -> dict[str, Any]:
     failed = 0
     errors: list[str] = []
     #: 按原因归类统计 —— 只回一句"失败 100 条"让人无从判断，
-    #: 而实际上其中近一半是"文献本身就没有正文"这类**正常情况**。
+    #: 而实际上其中近一半是"文献本身就没有正文"这类正常情况。
     reasons: dict[str, dict[str, Any]] = {}
 
     async def note_failure(paper: Any, message: str) -> None:

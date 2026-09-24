@@ -1,12 +1,11 @@
-"""Unpaywall —— 按 DOI 查找**合法**的开放获取副本。
+"""Unpaywall 客户端：按 DOI 查合法的开放获取副本。
 
-为什么值得单独接一个数据源：本地库里大量文献只有 DOI、没有 PMCID，
-既不是 Europe PMC 能覆盖的，也没有 ``full_text_url``，于是永远拿不到全文。
-Unpaywall 索引了全球机构库/预印本/期刊的 OA 副本，按 DOI 一查就知道
-有没有合法免费版本、在哪里。
+本地库里大量文献只有 DOI、没有 PMCID，Europe PMC 覆盖不到，也没有
+``full_text_url``。Unpaywall 索引了机构库/预印本/期刊的 OA 副本，
+按 DOI 一查即可定位免费版本。
 
-它**只返回开放获取链接**，不做任何认证绕过，因此完全合规；
-API 免费，但要求带上联系邮箱（``sources.unpaywall.email``）。
+只返回开放获取链接，不做认证绕过；API 免费，要求带联系邮箱
+（``sources.unpaywall.email``）。
 
 接口：``GET https://api.unpaywall.org/v2/{doi}?email=you@example.com``
 文档：https://unpaywall.org/products/api
@@ -27,10 +26,10 @@ __all__ = ["UnpaywallClient", "OALocation", "is_valid_email"]
 
 
 def is_valid_email(value: str | None) -> bool:
-    """Unpaywall 要求一个真实邮箱；这里只做基本形状校验。
+    """Unpaywall 要求真实邮箱；这里只做基本形状校验。
 
-    邮箱为空时我们**不猜也不编**，直接跳过并提示用户配置 ——
-    用一个假邮箱去调用是不礼貌的，也可能被限流。
+    邮箱为空时不猜不编，直接跳过并提示用户配置 ——
+    用假邮箱调用不礼貌，也可能被限流。
     """
     text = (value or "").strip()
     if "@" not in text:
@@ -70,7 +69,7 @@ class UnpaywallClient(BaseClient):
     """Unpaywall 客户端。
 
     注意：它不是"检索数据源"，只按 DOI 查 OA 位置，
-    因此**不注册**到 ``SourceRegistry._CLIENT_TYPES``，也不会出现在
+    因此不注册到 ``SourceRegistry._CLIENT_TYPES``，也不会出现在
     数据源选择里；只有 Reader 取全文时会用到它。
     """
 
@@ -95,7 +94,7 @@ class UnpaywallClient(BaseClient):
     async def lookup(self, doi: str) -> dict[str, Any] | None:
         """查询一个 DOI，返回 Unpaywall 原始记录；未收录返回 ``None``。
 
-        404 表示"这个 DOI 不在 Unpaywall 里"，是**正常结果**，不抛异常。
+        404 表示"这个 DOI 不在 Unpaywall 里"，是正常结果，不抛异常。
         """
         clean = (doi or "").strip()
         if not clean:

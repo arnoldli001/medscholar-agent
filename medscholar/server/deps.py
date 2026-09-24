@@ -1,24 +1,22 @@
 """路由层共享的依赖与纯工具。
 
-**为什么需要这个模块。** ``app.py`` 原来是一个 1384 行的"上帝模块"：单个
-``_register_routes`` 就注册了 54 个接口，还混着 18 个 Pydantic 请求模型与一堆
-局部闭包。按业务标签拆成 ``routes/`` 下的六个 APIRouter 之后，**跨 router 共享**
-的东西必须有一个唯一归属，否则只剩两条错路：
+``app.py`` 原来是一个 1384 行的"上帝模块"：单个 ``_register_routes`` 注册了
+54 个接口，还混着 18 个 Pydantic 请求模型与一堆局部闭包。按业务标签拆成
+``routes/`` 下的六个 APIRouter 之后，跨 router 共享的东西必须有一个唯一归属，
+否则要么 ``routes/a.py`` 水平 import ``routes/b.py``，要么每个 router 各自
+import 一遍、各自建一份——数据库与 Agent 运行时被重复初始化，本地单用户工具
+不能发生这种事。
 
-* ``routes/a.py`` 去 import ``routes/b.py`` —— 水平依赖，改一个业务组就牵连另一个；
-* 每个 router 各自 import 一遍、各自建一份 —— 数据库与 Agent 运行时会被重复初始化，
-  这是本地单用户工具**绝对不能**发生的事。
+本模块承担两个职责：
 
-所以本模块承担两个职责：
+1. 全局单例的唯一取用口：``get_db`` / ``get_runtime`` / ``get_registry`` /
+   ``get_config``。它们仍是各自模块里原有的单例（这里只是重导出，不新建实例、
+   不加缓存），"谁先调用谁初始化、之后处处同一份"的语义与拆分前一致。
+2. 被多处复用的纯函数与常量：首页渲染（静态资源版本号注入）、运行可续跑判定、
+   SSE 响应头。
 
-1. **全局单例的唯一取用口**：``get_db`` / ``get_runtime`` / ``get_registry`` /
-   ``get_config``。它们本身仍是各自模块里原有的单例（这里只是重导出，不新建实例、
-   不加缓存），因此"谁先调用谁初始化、之后处处同一份"的语义与拆分前完全一致。
-2. **被多处复用的纯函数与常量**：首页渲染（静态资源版本号注入）、"这次运行还能不能
-   接着跑"的判定、SSE 响应头。
-
-**依赖方向是单向的**：``app.py`` → ``routes/*`` → ``deps.py`` → 业务模块。
-本模块**不得** import 任何 ``routes.*``，否则立刻退化成循环导入。
+依赖方向单向：``app.py`` → ``routes/*`` → ``deps.py`` → 业务模块。
+本模块不得 import 任何 ``routes.*``，否则立刻循环导入。
 """
 
 from __future__ import annotations
@@ -61,12 +59,12 @@ def is_resumable(status: str, phase: str, done_phases: list[str] | None = None) 
 
 
 def render_index(index_file: Path) -> str:
-    """读取 index.html 并给静态资源加上**基于文件修改时间的版本号**。
+    """读取 index.html 并给静态资源加上基于文件修改时间的版本号。
 
-    为什么要这么做：这是一个纯本地工具，静态资源缓存没有任何收益，
-    却会导致"服务端修好了、用户浏览器还在跑旧 JS"——实测踩到过，
-    表现为反复收到已经修复过的报错。``Cache-Control: no-store`` 只能防止**再次**
-    缓存，对"浏览器已经缓存了旧副本"无能为力；换成带版本号的新 URL 才能强制更新。
+    纯本地工具，静态资源缓存没有任何收益，却会导致"服务端修好了、用户浏览器
+    还在跑旧 JS"——实测踩到过，表现为反复收到已经修复过的报错。
+    ``Cache-Control: no-store`` 只能防止再次缓存，对"浏览器已经缓存了旧副本"
+    无能为力；换成带版本号的新 URL 才能强制更新。
     """
     html = index_file.read_text(encoding="utf-8")
     for asset in ("app.js", "style.css"):
@@ -82,7 +80,7 @@ def render_index(index_file: Path) -> str:
 def sse_headers() -> dict[str, str]:
     """SSE 响应头（``/api/agent/stream/*`` 与 ``/api/ask`` 共用）。
 
-    返回**新字典**而不是共享常量：Starlette 会在这份 header 上做处理，
+    返回新字典而不是共享常量：Starlette 会在这份 header 上做处理，
     共享同一个可变对象迟早会串味。
     """
     return {

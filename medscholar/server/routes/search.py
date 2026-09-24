@@ -1,7 +1,7 @@
 """检索与问答路由：``tags=["检索"]``（检索式预览、联网检索）+ ``tags=["问答"]``。
 
 三者共享同一个"用户输入 → 检索式"的解析源头（``medscholar.query``），
-预览与真正检索因此**所见即所发**；问答只打本地知识库，不联网、不写综述。
+预览与真正检索因此所见即所发；问答只打本地知识库，不联网、不写综述。
 """
 
 from __future__ import annotations
@@ -57,10 +57,10 @@ class AskRequest(BaseModel):
 async def query_preview(req: QueryPreviewRequest) -> dict[str, Any]:
     """把用户的检索输入解析成结构化查询，并给出各数据源的实际检索式。
 
-    前端用它做「将检索：…」的实时回显 —— 用户不必记布尔语法，
+    前端用它做「将检索：…」的实时回显——用户不必记布尔语法，
     看一眼就知道空格/逗号/竖线/减号被理解成了什么。
 
-    解析逻辑与真正检索时**完全同源**（同一个 ``medscholar.query``），
+    解析逻辑与真正检索时完全同源（同一个 ``medscholar.query``），
     因此预览所见即实际所发。
     """
     from ...query import BOOLEAN_SOURCES, SUPPORTED_SYNTAX_HELP, for_source, parse_query
@@ -123,7 +123,7 @@ async def live_search(req: LiveSearchRequest) -> dict[str, Any]:
 
 @router.post("/api/ask", tags=["问答"])
 async def ask(req: AskRequest, request: Request) -> StreamingResponse:
-    """基于**本地知识库**回答问题（不启动完整研究工作流）。
+    """基于本地知识库回答问题（不启动完整研究工作流）。
 
     与 ``/api/agent/run`` 的区别：这里不做联网检索、不写综述、不走审批，
     只做「混合检索 → 拼接材料 → LLM 回答」，因此几秒到一分钟就能给出答案。

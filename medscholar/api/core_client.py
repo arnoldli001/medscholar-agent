@@ -1,11 +1,10 @@
 """CORE 客户端（聚合全球机构知识库）。
 
-补的是什么缺口：机构库（大学/研究所自建库）里的学位论文、技术报告、
-会议论文、以及"作者自存档"的已录用稿，PubMed / OpenAlex / Crossref
-都可能收录不全。CORE 聚合了上万个机构库，是找这些材料的首选。
+机构库（大学/研究所自建库）里的学位论文、技术报告、会议论文和作者自存档
+的录用稿，PubMed / OpenAlex / Crossref 收录不全；CORE 聚合了上万个机构库。
 
-需要**免费** API Key（注册后立即得到）：https://core.ac.uk/services/api
-未配置 key 时本客户端会被注册表视为不可用，不会报错中断检索。
+需要免费 API Key（注册后立即得到）：https://core.ac.uk/services/api
+未配置 key 时注册表会跳过本客户端，不会报错中断检索。
 接口：``GET https://api.core.ac.uk/v3/search/works?q=...``
 """
 
@@ -33,7 +32,7 @@ class CoreClient(BaseClient):
     base_url = _BASE
 
     def enabled(self) -> bool:
-        """没有 API Key 就不能用 —— 提前返回 False，让注册表直接跳过。"""
+        """没有 API Key 就不能用，提前返回 False 让注册表跳过。"""
         return bool(self.settings.enabled and self.settings.api_key.strip())
 
     async def search(

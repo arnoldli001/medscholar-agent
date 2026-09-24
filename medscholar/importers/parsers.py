@@ -1,11 +1,11 @@
 """文献题录文件解析：RIS / BibTeX / EndNote 标记格式 / CSV。
 
-为什么要做这个：Web of Science、Scopus、Embase、Cochrane、CNKI、万方
-都支持把检索结果**导出**成 RIS / BibTeX / 标记文本，而这些数据库本身
+Web of Science、Scopus、Embase、Cochrane、CNKI、万方
+都支持把检索结果导出成 RIS / BibTeX / 标记文本，而这些数据库本身
 没有开放 API。让用户"从学校订阅合法导出 → 导入本地库"，
 既拿到了这些库的题录，又不涉及任何抓取或认证绕过。
 
-设计原则：解析器只负责"文本 → Paper 列表"，不做网络、不碰数据库，
+解析器只负责"文本 → Paper 列表"，不做网络、不碰数据库，
 因此可以单独测试，也便于将来接新的导出格式。
 """
 
@@ -48,7 +48,7 @@ _RIS_MAP: dict[str, str] = {
     "J2": "journal", "SO": "journal",
     "PY": "pub_year", "DA": "pub_year", "Y1": "pub_year", "PD": "pub_year",
     # DOI：RIS 规范是 DO，但 Web of Science 用 DI。少了这个键，
-    # WoS 导出的文献会全部丢掉 DOI —— 去重和全文获取都会跟着失效。
+    # WoS 导出的文献会丢掉 DOI，去重和全文获取也会跟着失效。
     "DO": "doi", "DI": "doi",
     "AN": "source_id",
     "UR": "url", "L1": "full_text_url", "L2": "full_text_url",
@@ -205,7 +205,7 @@ _BIB_TYPE_MAP: dict[str, str] = {
 }
 
 #: BibTeX 里常见的 LaTeX 转义 → Unicode。只处理标题/作者里高频出现的那些，
-#: 不做完整 LaTeX 渲染（那是另一个量级的工程）。
+#: 不做完整 LaTeX 渲染。
 _LATEX_MAP: dict[str, str] = {
     r"\\&": "&", r"\\%": "%", r"\\$": "$", r"\\#": "#", r"\\_": "_",
     r"\\{": "{", r"\\}": "}", r"~": " ", r"\\,": "", r"\\ ": " ",
@@ -707,8 +707,8 @@ def parse_csv(text: str, *, default_source: str = "import") -> list[Paper]:
 def detect_format(text: str, filename: str = "") -> str:
     """判断题录文件格式，返回 ``ris/bibtex/tagged/wos/csv`` 之一。
 
-    顺序很重要：**先按内容排除**再按扩展名判断。
-    踩过的坑：WoS 的纯文本导出存成 .txt，第一行恰好同时含 "title" 和逗号，
+    顺序：先按内容排除，再按扩展名判断。
+    踩过的坑：WoS 纯文本导出存成 .txt，第一行含 "title" 和逗号，
     被误判成 CSV；所以 BibTeX / WoS 这些有强特征的格式必须先识别。
     """
     body = (text or "").lstrip("\ufeff")
@@ -746,7 +746,7 @@ def detect_format(text: str, filename: str = "") -> str:
 
 
 def _looks_like_csv(text: str) -> bool:
-    """CSV 判定要**严**：必须有像表头的首行，且命中已知列名。
+    """CSV 判定要严：必须有像表头的首行，且命中已知列名。
 
     否则 WoS/BibTeX 的文本导出会被误判（第一行常含 "title" 和逗号）。
     """

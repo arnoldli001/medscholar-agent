@@ -1,13 +1,11 @@
 """SQLite 连接管理与 schema 初始化。
 
-关键点（踩坑记录）：
-
-* ``sqlite_vec.load(conn)`` **不会**自行开启扩展加载权限，必须先调用
+* ``sqlite_vec.load(conn)`` 不会自行开启扩展加载权限，必须先调用
   ``conn.enable_load_extension(True)``，否则报 ``OperationalError: not authorized``。
-* ``sqlite_vec.loadable_path()`` 返回的是不带 ``.dll`` 后缀的路径，这是正常的
-  —— Windows 下 SQLite 会自动补后缀。
-* 若扩展无法加载（朋友机器缺少 VC 运行库 / 架构不符 / Python 自带的 SQLite
-  未启用扩展），自动退化为**纯 Python 向量检索**，功能不受影响，只是规模上限降低。
+* ``sqlite_vec.loadable_path()`` 返回的是不带 ``.dll`` 后缀的路径，Windows 下
+  SQLite 会自动补后缀。
+* 扩展无法加载（缺 VC 运行库 / 架构不符 / Python 自带的 SQLite 未启用扩展）时，
+  自动退化为纯 Python 向量检索，功能不受影响，只是规模上限降低。
 """
 
 from __future__ import annotations
@@ -160,23 +158,16 @@ class Database:
     def _bootstrap_migrations(self) -> None:
         """建表之后跑一遍 schema 迁移，并把版本历史对齐到 ``schema_migrations``。
 
-        为什么顺序是"先 schema.sql 后迁移"：``schema.sql`` 用
-        ``CREATE TABLE IF NOT EXISTS`` 描述的是**当前**结构，它对已有的 400+ 篇
-        文献的库是无害的（不会重建已有表）；迁移要解决的是它解决不了的那部分 ——
-        老库可能是**旧结构**，需要按版本有序地补索引/补列，并且这个"补"的过程
-        必须可重复执行、可回滚、可观测。所以：结构交给 schema.sql 铺底，
-        版本化的演进交给迁移。
+        ``schema.sql`` 用 ``CREATE TABLE IF NOT EXISTS`` 描述当前结构，对已有
+        数据的库无害；迁移负责老库的索引/列补齐，按版本有序执行、可重复、可回滚。
 
-        为什么这里**不**做迁移前备份（``backup=False``）：启动路径上每次打开库
-        都复制一遍文件是纯浪费，而 ``init_database`` 里的迁移通常只是"登记基线"。
-        真正会改动结构的迁移由 ``python -m medscholar.db.migrate --apply`` 执行，
-        那条路径默认备份。
+        这里不做迁移前备份：启动路径上每次打开库都复制文件是纯浪费，真正会改动
+        结构的迁移由 ``python -m medscholar.db.migrate --apply`` 执行，那条路径
+        默认备份。
 
-        为什么迁移失败**只告警、不抛异常**：这个方法在 ``Database()`` 构造里，
-        抛异常等于整个应用打不开 —— 用户会因为一次索引没建成而彻底失去工具
-        （连自己的 400 篇文献都看不到）。这里的取舍是"功能可用优先"：
-        记录 WARNING + 在 ``schema_migrations`` 里留下 ``success=0`` 的失败行，
-        让问题可见、可排查、可重试。
+        迁移失败只告警、不抛异常：这个方法在 ``Database()`` 构造里，抛异常等于
+        整个应用打不开。这里记录 WARNING + 在 ``schema_migrations`` 里留下
+        ``success=0`` 的失败行，让问题可见、可排查、可重试。
         """
         from .migrate import MigrationError, apply_migrations
 
@@ -188,9 +179,7 @@ class Database:
             result = apply_migrations(
                 self.conn,
                 backup=False,
-                # 库里已经有文献时不因为"有人改过已发布的迁移"把应用挡在门外：
-                # 用户的库是**不能丢**的资产，"能打开"优先于"立刻报错"。
-                # 全新/空库仍然走严格模式，让开发期立刻发现问题。
+                # 库里已有文献时不因"已发布迁移被改过"把应用挡在门外；全新/空库仍走严格模式
                 allow_checksum_change=has_data,
             )
         except MigrationError:

@@ -1,16 +1,14 @@
 """集中管理项目中的语义化常量。
 
-为什么需要这个模块：
 项目里散布着大量"魔鬼数字"——同样的 200、600、800 在不同位置出现，
 改一个地方容易漏改另一个；而且数字本身不带语义，阅读时要靠上下文猜
 "这个 256 是干嘛的"。把有明确语义、可能被调整、或跨模块复用的数字
 集中到这里，做到「一处定义，处处引用」。
 
-分组原则：
-* 按**关注点**分组（LLM 生成 / 文本裁剪 / 评分阈值 / 预算 / 运行时 / 数据库 / HTTP）；
-* 常量名要**自解释**（``LLM_TEMPERATURE_OUTLINE`` 而不是 ``T1``）；
-* 已经在 :mod:`medscholar.platform.config` 里可配置的（如 ``review_min_chars``）
-  **不重复**放在这里——配置项走 config，硬编码调优参数走这里。
+分组按关注点（LLM 生成 / 文本裁剪 / 评分阈值 / 预算 / 运行时 / 数据库 / HTTP）；
+常量名要自解释（``LLM_TEMPERATURE_OUTLINE`` 而不是 ``T1``）；
+已经在 :mod:`medscholar.platform.config` 里可配置的（如 ``review_min_chars``）
+不重复放在这里——配置项走 config，硬编码调优参数走这里。
 """
 
 from __future__ import annotations

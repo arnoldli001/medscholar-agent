@@ -1,11 +1,11 @@
 """OpenAI 兼容后端（DeepSeek / vLLM / One-API 等）：报文构造与响应解析。
 
-作为 **Mixin** 混入 :class:`~medscholar.llm.client.LLMClient`，宿主契约同
+作为 Mixin 混入 :class:`~medscholar.llm.client.LLMClient`，宿主契约同
 :mod:`medscholar.llm.ollama_backend`。
 
-这一套里有一处**必须保留**的防御：云端推理模型（DeepSeek 的推理系列）把思维链
-放在 ``reasoning_content``，与正文**共用** ``max_tokens`` 预算。预算不够时
-``content`` 会是空字符串 —— 早期版本会静默返回空文本，表现为"综述一个字都没写"
+这一套里有一处必须保留的防御：云端推理模型（DeepSeek 的推理系列）把思维链
+放在 ``reasoning_content``，与正文共用 ``max_tokens`` 预算。预算不够时
+``content`` 会是空字符串——早期版本会静默返回空文本，表现为"综述一个字都没写"
 却没有任何报错。所以这里对"空 content + finish_reason=length"单独报错并给出调参建议。
 """
 
@@ -100,8 +100,8 @@ class OpenAIBackend:
 
         # 云端推理模型（DeepSeek 的 deepseek-flash / deepseek-v4-pro 都是）会把
         # 思维链放在独立的 reasoning_content 字段里，content 只放最终答案。
-        # 如果 max_tokens 不够，模型会把预算全花在思考上，content 直接是空字符串 ——
-        # 早期版本会**静默返回空文本**，表现为"综述一个字都没写"却没有任何报错。
+        # 如果 max_tokens 不够，模型会把预算全花在思考上，content 直接是空字符串：
+        # 早期版本会静默返回空文本，表现为"综述一个字都没写"却没有任何报错。
         if not content.strip():
             if finish == "length":
                 raise LLMError(

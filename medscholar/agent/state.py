@@ -142,7 +142,7 @@ _SEARCH_MARKERS = (" AND ", " OR ", " NOT ", "[", "]", '"', ":", "*", "(", ")")
 def coerce_plan_payload(payload: Any) -> dict[str, Any]:
     """把模型返回的 JSON 归一化成 :class:`ResearchPlan` 需要的字典。
 
-    模型并不总是听话。实测 qwen3:8b 在规划阶段返回过**顶层数组**，直接交给
+    模型并不总是听话。实测 qwen3:8b 在规划阶段返回过顶层数组，直接交给
     ``ResearchPlan.from_dict`` 会抛 ``'list' object has no attribute 'get'``，
     整次规划降级成模板大纲。这里把常见的几种走样都救回来：
 
@@ -515,7 +515,7 @@ class AgentState:
     ) -> list[tuple[int, Paper]]:
         """挑选进入写作上下文的文献，返回 ``[(引用编号, Paper), ...]``。
 
-        编号在**筛选之后**重新连续分配，确保正文里的 ``[n]`` 与参考文献表
+        编号在筛选之后重新连续分配，确保正文里的 ``[n]`` 与参考文献表
         严格一一对应（这是引用准确性最容易出错的地方）。
         """
         if not self.citation_map:

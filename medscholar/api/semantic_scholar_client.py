@@ -1,13 +1,10 @@
 """Semantic Scholar Graph API 客户端。
 
-强项是引用图谱（``references`` / ``citations``）与 TLDR 机器摘要，用于：
+引用图谱（``references`` / ``citations``）与 TLDR 机器摘要质量较好，
+供 Critic Agent 评估影响力和综述回溯奠基工作。
 
-* Critic Agent 判断某篇文献在领域内的影响力
-* 综述写作时回溯奠基性工作
-
-限流说明：无 Key 约 100 次 / 5 分钟（≈0.33 次/秒），有 Key 为 1000 次 / 5 分钟。
-无 Key 时 429 非常常见，因此本客户端实现了**自适应降速**：连续被限流就主动
-拉低令牌桶速率，而不是硬撞限流墙。
+限流：无 Key 约 100 次 / 5 分钟（≈0.33 次/秒），有 Key 1000 次 / 5 分钟。
+无 Key 时 429 很常见，连续被限流时主动把令牌桶速率减半，不硬撞限流墙。
 """
 
 from __future__ import annotations
@@ -25,7 +22,7 @@ logger = logging.getLogger(__name__)
 __all__ = ["SemanticScholarClient"]
 
 _BASE = "https://api.semanticscholar.org/graph/v1"
-_MIN_RPS = 0.05  # 最快也要 20 秒一次，避免被彻底封禁
+_MIN_RPS = 0.05  # 20 秒一次，再低容易被彻底封禁
 
 _PAPER_FIELDS = (
     "paperId,title,abstract,year,venue,publicationVenue,journal,externalIds,"

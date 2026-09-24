@@ -34,11 +34,11 @@ DEFAULT_CONFIG_FILENAME = "config.yaml"
 
 # --------------------------------------------------------------------- 路径
 #: 源码/解压包根目录的"标记文件"：有这个文件就说明这一层是项目根。
-#: 用标记而不是写死 `Path(__file__).parent.parent`，是因为**层级会随重构变化**：
+#: 用标记而不是写死 `Path(__file__).parent.parent`，是因为层级会随重构变化：
 #: 这个模块从 `medscholar/config.py` 搬到 `medscholar/platform/config.py` 之后，
-#: 写死的 `.parent.parent` 就少了一层 —— 源码树判定失败 → `data_home()` 悄悄退回到
+#: 写死的 `.parent.parent` 就少了一层——源码树判定失败 → `data_home()` 悄悄退回到
 #: `~/.medscholar` → 用户打开应用看到"知识库中还没有文献"（真实事故：仓库里的 587 篇
-#: 文献读不到了，而且**没有任何报错**）。
+#: 文献读不到了，而且没有任何报错）。
 ROOT_MARKERS: tuple[str, ...] = ("pyproject.toml", "run.bat", "config.example.yaml")
 
 
@@ -199,7 +199,7 @@ class LLMSettings(BaseModel):
     api_key: str = ""
     temperature: float = 0.3
     top_p: float = 0.9
-    #: 单次输出上限。**推理模型的思维链与正文共用这个配额**（DeepSeek 的
+    #: 单次输出上限。推理模型的思维链与正文共用这个配额（DeepSeek 的
     #: deepseek-flash / deepseek-v4-pro 都属于推理模型），设得太小会导致
     #: 模型把预算全花在思考上、正文返回空字符串。用云端推理模型时建议 >= 4000。
     max_tokens: int = 3000
@@ -207,13 +207,13 @@ class LLMSettings(BaseModel):
     think: bool = False          # Qwen3 等推理模型的思考开关
     num_ctx: int = 8192
     #: Ollama 模型在显存里的保留时长。Ollama 默认只有 5 分钟，一旦超时卸载，
-    #: 下次调用要重新加载 —— 实测 8B 模型重新载入要 60~120 秒，比生成还慢。
+    #: 下次调用要重新加载——实测 8B 模型重新载入要 60~120 秒，比生成还慢。
     #: 设成 "-1" 表示常驻不卸载（显存够用时最省时间）。
     keep_alive: str = "30m"
     failure_hint: str = ""       # 模型不可用时展示给用户的提示
 
     def consistency_error(self) -> str:
-        """检查 provider 与 model 是否自洽，不自洽时返回**可照做**的中文说明。
+        """检查 provider 与 model 是否自洽，不自洽时返回可照做的中文说明。
 
         这是为了根治一类真实故障：``provider: deepseek`` 却配着
         ``model: qwen3:8b``（Ollama 的模型名），请求发到云端必然 400，
@@ -296,7 +296,7 @@ class AgentSettings(BaseModel):
     fulltext_top_n: int = 4         # 预取全文的文献数（抓取较慢，不宜过多）
     auto_revise: bool = True        # 自我审查发现问题后是否自动修订一轮
     max_revise_rounds: int = 1
-    #: 综述正文的目标字数范围（中文字符计，**不含参考文献**）。
+    #: 综述正文的目标字数范围（中文字符计，不含参考文献）。
     #: 这是写作提示词里的硬指令：以前每节固定"约 900 字"，5 节只有 4500 字左右，
     #: 用户普遍反馈太短。改为按总字数范围反推每节目标。
     #: 注意：字数越大，单节生成时间越长（本地 8B 约 45 tok/s，约 1.7 字/token），
@@ -440,12 +440,12 @@ def _env_overrides(cfg: dict[str, Any]) -> dict[str, Any]:
 
     # LLM
     #
-    # ⚠️ 这里**刻意不根据 DEEPSEEK_API_KEY 自动切换 provider**。
+    # 这里刻意不根据 DEEPSEEK_API_KEY 自动切换 provider。
     # 曾经这么做过，结果是灾难性的：用户机器上另一个项目把 DEEPSEEK_API_KEY
     # 设成了用户级环境变量，于是 MedScholar 静默地把后端从 ollama 切到了 deepseek，
     # 却沿用了 config.yaml 里的 model: qwen3:8b，最终把 Ollama 的模型名发给了
     # DeepSeek 网关，得到 HTTP 400。
-    # 结论：**环境里存在某个 Key，不等于用户想让本程序用它**。
+    # 结论：环境里存在某个 Key，不等于用户想让本程序用它。
     # Key 只在用户显式把 provider 设为 deepseek/openai-compatible 后才生效。
     # 想切云端，请改 config.yaml 的 llm.provider（本文件下方会做一致性校验）。
     provider = os.environ.get("MEDSCHOLAR_LLM_PROVIDER")

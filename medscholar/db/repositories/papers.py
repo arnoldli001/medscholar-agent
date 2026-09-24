@@ -1,20 +1,18 @@
 """文献主表（papers）的读写：入库/去重富化、取回、分页列举、统计与删除。
 
-单独拆出来是因为它是最底层的数据边界：混合检索要读它的元数据过滤、向量与全文回填
-要读它挑候选、课题要按它分页。把它放底层，兄弟模块可以依赖它，而它不依赖任何兄弟模块。
+它是最底层的数据边界：混合检索要读它的元数据过滤、向量与全文回填
+要读它挑候选、课题要按它分页。放在底层，兄弟模块可以依赖它，而它不依赖任何兄弟模块。
 
-## 关于 ``embed=True``：为什么改成"注入钩子"
+关于 ``embed=True``：入库时顺带嵌入是调用方的便利，不是数据层的职责。
+原来这里直接 ``from ...embedding.pipeline import embed_paper``，
+形成 ``db.repositories.papers ↔ embedding.pipeline`` 的循环依赖
+（pipeline 又要 import 数据层来读文献）。
 
-入库时顺带嵌入是**便利**，不是数据层的职责。原来它直接
-``from ...embedding.pipeline import embed_paper``，于是产生了
-``db.repositories.papers ↔ embedding.pipeline`` 的**循环依赖**
-（pipeline 又要 import 数据层来读文献），依赖图里出现了环。
-
-这里改成依赖倒置：数据层只留一个空的钩子，由嵌入层在导入时注册自己
+现在改成依赖倒置：数据层只留一个空钩子，由嵌入层在导入时注册自己
 （``medscholar/embedding/__init__.py`` → :func:`register_embed_hooks`）。
-数据层因此**完全不认识嵌入层**，环被打破，而 ``embed=True`` 的调用方式不变。
+数据层不 import 嵌入层，环被打破，``embed=True`` 的调用方式不变。
 
-钩子没注册却传了 ``embed=True`` 时会**明确报错**而不是静默跳过 ——
+钩子没注册却传了 ``embed=True`` 时直接报错而不是静默跳过：
 "以为嵌入了其实没有"会让向量检索悄悄少掉一批文献，比报错难查得多。
 """
 
@@ -166,7 +164,7 @@ def _find_existing_id(conn: sqlite3.Connection, paper: Paper) -> int | None:
 def insert_paper(
     paper: Paper, *, db: Database | None = None, embed: bool = False
 ) -> tuple[int, bool]:
-    """插入或**富化**一篇文献。
+    """插入或富化一篇文献。
 
     Returns:
         ``(paper_id, created)``；``created=False`` 表示命中已有记录并被合并更新。

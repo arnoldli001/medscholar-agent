@@ -1,19 +1,19 @@
 """官方批量数据包导入（PubMed baseline / PMC Open Access Subset）。
 
-这是"合法爬取"的正确形态：这些数据是 NLM / Europe PMC **主动发布**给
+这是"合法爬取"的正确形态：这些数据是 NLM / Europe PMC 主动发布给
 批量使用的，README 明确允许下载、文本挖掘与再分发（PMC OA 子集）。
 
-* **PubMed baseline**：每年一次的 37M+ 条题录 XML（解压后约 40 GB）
+* PubMed baseline：每年一次的 37M+ 条题录 XML（解压后约 40 GB）
   https://pubmed.ncbi.nlm.nih.gov/download/
-* **PMC Open Access Subset**：FTP 上的全文包（.tar.gz，含 .nxml/PDF）
+* PMC Open Access Subset：FTP 上的全文包（.tar.gz，含 .nxml/PDF）
   https://www.ncbi.nlm.nih.gov/pmc/tools/ftp/
 
 工程要点（不这么做就会 OOM 或跑不完）：
 
-* 用 ``iterparse`` **流式**解析，处理完一个 ``<PubmedArticle>`` 立刻
+* 用 ``iterparse`` 流式解析，处理完一个 ``<PubmedArticle>`` 立刻
   ``elem.clear()`` —— 一次性 ``parse()`` 一个 1 GB 的 XML 必然爆内存；
-* PMC 的 tar.gz 用 ``r|gz`` **流式**模式读（不能 seek，因此顺序处理）；
-* 必须能按关键词/年份**过滤**：全量 3700 万条不可能都入库，
+* PMC 的 tar.gz 用 ``r|gz`` 流式模式读（不能 seek，因此顺序处理）；
+* 必须能按关键词/年份过滤：全量 3700 万条不可能都入库，
   默认只收命中主题的那些。
 """
 

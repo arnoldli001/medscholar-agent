@@ -1,16 +1,14 @@
 """数据库迁移的抽象层：迁移对象、注册表与定义期校验。
 
-## 为什么需要它
+项目全部数据放在单个 SQLite 文件里，用户的真实库里已有 400+ 篇文献。
+此前建表逻辑是 ``schema.sql`` + ``CREATE TABLE IF NOT EXISTS``：
+只能保证"表在"，不能保证表结构与代码期望一致。
+以后加字段、加索引、改 FTS 触发器时，老库与新代码之间没有机制兜底，
+唯一出路是"删库重建"——而用户的库不能丢。
 
-项目的全部数据放在**单个 SQLite 文件**里，用户的真实库里已经有 400+ 篇文献。
-在此之前，建表逻辑是 ``schema.sql`` + ``CREATE TABLE IF NOT EXISTS``：
-它只能保证"表在"，**不能保证表的结构与代码期望的一致**。
-一旦以后要加字段、加索引、改 FTS 触发器，老库与新代码之间没有任何机制兜底，
-唯一的出路是"删库重建"—— 而用户的库是不能丢的。
+不用 Alembic 的理由：
 
-## 为什么不用 Alembic（选型理由，会被追问）
-
-MedScholar Agent 是**免构建的便携应用**：拷一个目录、双击 ``run.bat`` 就能跑，
+MedScholar Agent 是免构建的便携应用：拷一个目录、双击 ``run.bat`` 就能跑，
 依赖只有 ``requirements.txt`` 里那几项。Alembic 会带进 SQLAlchemy 一整套
 ORM 运行时（几十 MB、额外的版本兼容面、额外的打包与分发步骤），
 而我们需要的全部能力只是：
@@ -19,20 +17,20 @@ ORM 运行时（几十 MB、额外的版本兼容面、额外的打包与分发�
 * 按版本号顺序、每个迁移一个事务地执行 SQL 或 Python；
 * 备份、dry-run、校验和、回滚。
 
-这些用 **标准库 sqlite3 + 约 500 行代码**就能做完，且没有任何新增依赖，
-``--select F,E9`` 级别的静态检查与便携分发都不受影响。换来的代价是：
-没有 autogenerate（迁移必须手写），这对本项目是**可接受的**——
+这些用标准库 sqlite3 + 约 500 行代码就能做完，没有任何新增依赖，
+``--select F,E9`` 级别的静态检查与便携分发都不受影响。代价是
+没有 autogenerate（迁移必须手写），这对本项目可接受：
 表结构的手写 SQL 本身就是需要人 review 的产物（见 ``schema.sql`` 的注释密度）。
 
-## 定义期的三道闸门
+定义期三道闸门：
 
-``validate_migrations()`` 在**加载注册表时**（而不是在用户库上执行到一半时）就检查：
+``validate_migrations()`` 在加载注册表时（而不是在用户库上执行到一半时）检查：
 
-1. 版本号不重复 —— 两个并行开发的分支各自写了 M0007，一旦合并就是灾难；
-2. 版本号严格递增 —— 乱序执行会让"第 2 步依赖第 1 步"的假设静默失效；
-3. **不可逆必须显式承认** —— 既没有 ``rollback`` 又没写 ``irreversible_reason``
-   的迁移直接报错。理由：作者往往默认"这个改动应该能撤"，等到线上出事才发现
-   撤不回来。把"回不去"变成必须手写的字段，等于强制他当场想一遍退路。
+1. 版本号不重复：两个并行分支各自写了 M0007，合并后是灾难；
+2. 版本号严格递增：乱序执行让"第 2 步依赖第 1 步"的假设静默失效；
+3. 不可逆必须显式承认：既没有 ``rollback`` 又没写 ``irreversible_reason``
+   的迁移直接报错。作者往往默认"这个改动应该能撤"，等线上出事才发现撤不回来。
+   把"回不去"变成必须手写的字段，等于强制他当场想一遍退路。
 """
 
 from __future__ import annotations
@@ -84,14 +82,14 @@ def _is_slug(value: str) -> bool:
 class Migration:
     """一个不可变的迁移定义。
 
-    ``statements`` 与 ``python`` 是**同一个迁移的两半**，按顺序执行：
+    ``statements`` 与 ``python`` 是同一个迁移的两半，按顺序执行：
     先逐条跑 SQL，再调 Python 钩子；``rollback`` / ``python_revert`` 按相反顺序撤销。
 
-    为什么同时保留 SQL 与 Python 两条路：
-    * 纯 SQL 的迁移（加索引、加列）应该只写 SQL —— 可读、可 review、可被工具分析；
-    * 但"老库基线对齐""改列并回填数据"这类逻辑用 SQL 表达会又长又脆，
+    同时保留 SQL 与 Python 两条路：
+    * 纯 SQL 的迁移（加索引、加列）只写 SQL：可读、可 review、可被工具分析；
+    * "老库基线对齐""改列并回填数据"这类逻辑用 SQL 表达会又长又脆，
       写成 Python 函数反而清楚。典型是 :mod:`medscholar.db.migrations.registry`
-      里的 M0001：它**一个字节都不改库**，只是识别既有结构并补登记历史。
+      里的 M0001：它一个字节都不改库，只是识别既有结构并补登记历史。
     """
 
     version: int
@@ -112,11 +110,11 @@ class Migration:
     def apply(self, conn: sqlite3.Connection) -> None:
         """正向执行：先 SQL，再 Python 钩子。
 
-        **事务由执行器负责**（``BEGIN`` / ``COMMIT`` / ``ROLLBACK``），
-        这里只负责"把这一条说完"。因此这里**绝不能**出现 ``executescript``
+        事务由执行器负责（``BEGIN`` / ``COMMIT`` / ``ROLLBACK``），
+        这里只负责"把这一条说完"。因此这里绝不能出现 ``executescript``
         或显式 ``COMMIT``：前者会先隐式提交当前事务，把执行器开的事务撕开
-        （于是"第 2 条失败回滚第 1 条"的保证消失，用户库里留下半成品），
-        后者则会替执行器做决定，让失败分支的 ``ROLLBACK`` 报
+        （"第 2 条失败回滚第 1 条"的保证消失，用户库里留下半成品），
+        后者会替执行器做决定，让失败分支的 ``ROLLBACK`` 报
         "cannot rollback - no transaction is active"。
         """
         for statement in self.statements:
@@ -125,9 +123,9 @@ class Migration:
             self.python(conn)
 
     def revert(self, conn: sqlite3.Connection) -> None:
-        """反向执行：先 Python 回滚钩子，再按**相反顺序**跑回滚 SQL。
+        """反向执行：先 Python 回滚钩子，再按相反顺序跑回滚 SQL。
 
-        为什么要反序：正向是"先建后改"，回滚自然要先撤改动、再撤创建，
+        正向是"先建后改"，回滚自然要先撤改动、再撤创建，
         否则撤销依赖前一条语句的产物时会直接失败。
         """
         if not self.reversible:
@@ -151,7 +149,7 @@ class Migration:
         """回滚钩子：只有真正的函数才会被当成钩子。
 
         ``Migration`` 是 frozen dataclass，如果有人误把字符串塞进 ``python``，
-        这里返回 ``None`` 而不是在 ``revert()`` 里抛 ``TypeError`` ——
+        这里返回 ``None`` 而不是在 ``revert()`` 里抛 ``TypeError``：
         "不可逆"要给出人类能看懂的理由，而不是类型错误。
         """
         return self.python if callable(self.python) else None
@@ -160,7 +158,7 @@ class Migration:
         """迁移定义的指纹（sha256 前 16 位十六进制）。
 
         用途见 :meth:`MigrationRunner.apply`：已应用迁移的语句被事后改动时，
-        不同人机器上的库结构会**静默地不一样**，这是最阴险的一类事故。
+        不同人机器上的库结构会静默地不一样，是最阴险的一类事故。
         指纹写进 ``schema_migrations.checksum``，下次 ``apply()`` 就能发现。
         """
         digest = hashlib.sha256()
@@ -179,10 +177,9 @@ class Migration:
     def _python_fingerprint(self) -> str:
         """Python 钩子的指纹：优先全限定名，退化为源码哈希。
 
-        为什么两种都用：源码哈希最准（函数体改了就会变），但打包成
-        单文件 exe / zipapp 后 ``getsource`` 拿不到源码，此时退化为模块名 +
-        函数名 —— 虽然漏检函数体改动，但**至少仍能检出改名与挪位**。
-        为了不让"拿不到源码"变成校验和为空，退化路径必须存在。
+        源码哈希最准（函数体改了就会变），但打包成单文件 exe / zipapp 后
+        ``getsource`` 拿不到源码，此时退化为模块名 + 函数名：虽然漏检函数体改动，
+        但至少仍能检出改名与挪位。"拿不到源码"不能变成校验和为空，退化路径必须存在。
         """
         func = self.python
         if func is None:
@@ -202,7 +199,7 @@ class Migration:
 def _normalize_sql(statement: str) -> str:
     """比较语句时忽略纯格式差异（统一行尾、压缩首尾空白）。
 
-    为什么只做这一点点归一化：多行 SQL 的缩进不同应该算同一条语句，
+    只做这一点点归一化：多行 SQL 的缩进不同算同一条语句，
     但任何更强的"重写"（比如去掉空白）都会掩盖真实的语义改动，
     而校验和存在的唯一目的就是抓语义改动。宁可误报，绝不漏报。
     """
@@ -212,7 +209,7 @@ def _normalize_sql(statement: str) -> str:
 def perf_counter_ms() -> float:
     """单调时钟（毫秒）。用 ``perf_counter`` 而不是 ``time.time``：
     迁移耗时写进 ``schema_migrations.duration_ms`` 供性能对比，
-    而 ``time.time`` 会因系统对时/夏令时跳变（甚至倒流）给出负数或尖峰。
+    ``time.time`` 会因系统对时/夏令时跳变（甚至倒流）给出负数或尖峰。
     """
     return time.perf_counter() * 1000.0
 
@@ -233,8 +230,8 @@ def migration(
     """把一个函数注册成迁移。
 
     被装饰的函数接收 ``sqlite3.Connection``，在 Python 钩子里可以任意写库
-    （它跑在迁移自己的事务里，失败会整体回滚）。装饰器返回**原函数本身**，
-    所以模块级名字仍然可以直接调用——测试里这一点很有用。
+    （它跑在迁移自己的事务里，失败会整体回滚）。装饰器返回原函数本身，
+    所以模块级名字仍然可以直接调用，测试里这一点很有用。
 
     用法::
 
@@ -281,7 +278,7 @@ def register(item: Migration) -> Migration:
 
 
 def registered_migrations() -> list[Migration]:
-    """按版本号升序返回已注册的迁移（**不做**增删改校验，供诊断使用）。"""
+    """按版本号升序返回已注册的迁移（不做增删改校验，供诊断使用）。"""
     return [_REGISTRY[v] for v in sorted(_REGISTRY)]
 
 
@@ -293,7 +290,7 @@ def reset_registry() -> None:
 def validate_migrations(items: Iterable[Migration]) -> tuple[Migration, ...]:
     """校验并归一化一组迁移，返回按版本号升序的元组。
 
-    这是"定义期闸门"的实现：它**不碰数据库**，所以错误在导入注册表时就会暴露，
+    这是"定义期闸门"的实现：它不碰数据库，错误在导入注册表时就会暴露，
     而不是在用户库上跑到一半才炸。
     """
     ordered = sorted(items, key=lambda m: m.version)

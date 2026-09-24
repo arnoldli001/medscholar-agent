@@ -1,8 +1,8 @@
 """领域数据模型（Paper / ScoredPaper / 数据源标签）
 
-实现已迁至 :mod:`medscholar.domain.models`，本模块保留为**兼容外壳**。
+实现已迁至 :mod:`medscholar.domain.models`，本模块保留为兼容外壳。
 
-为什么保留而不是删掉：``medscholar.models`` 是**公开契约** —— CLI、HTTP 服务、MCP、
+为什么保留而不是删掉：``medscholar.models`` 是公开契约 —— CLI、HTTP 服务、MCP、
 评测脚本、文档示例以及用户自己写的二次脚本都在 import 它。一次性改掉所有调用点
 会把"低风险的代码搬迁"变成"高风险的大改造"，而只做重导出的外壳成本几乎为零。
 

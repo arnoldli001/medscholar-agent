@@ -1,7 +1,7 @@
 """跨数据源去重与记录合并。
 
 同一篇文献常同时出现在 PubMed、Europe PMC、OpenAlex、Semantic Scholar 中。
-去重键优先级：**DOI → PMID → 标题指纹**（见 :attr:`Paper.dedup_key`）。
+去重键优先级：DOI → PMID → 标题指纹（见 :attr:`Paper.dedup_key`）。
 
 合并策略是「取长补短」而非简单去重：保留信息最全的一条作为骨架，
 再逐字段补空（摘要取更长的、被引取更大值、开放获取取逻辑或）。

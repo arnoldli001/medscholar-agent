@@ -1,11 +1,10 @@
 """可观测性：trace/span、LLM 用量与成本账本、失败分类。
 
-这一层是**最底层基础设施**，只依赖标准库：它被 api / agent / llm / server 所有层使用，
+本层是最底层基础设施，只依赖标准库：它被 api / agent / llm / server 所有层使用，
 一旦反过来依赖业务层，依赖图立刻成环（由 ``scripts/check_arch.py`` 强制）。
 
-为什么需要它？本地学术智能体跑一次综述会发出几十次 LLM 调用和上百次网络请求。
-出问题时用户只会说"卡住了/没结果"，而日志里是几千行散乱输出。本模块把三件事
-变成**可聚合的结构化数据**：
+本地学术智能体跑一次综述会发出几十次 LLM 调用和上百次网络请求。出问题时用户只会说
+"卡住了/没结果"，而日志里是几千行散乱输出。本模块把三件事变成可聚合的结构化数据：
 
 1. :class:`LLMUsage` + :class:`UsageLedger` —— 每次调用的 token、耗时、成本、阶段，
    用来回答"这次综述花了多少钱、慢在哪一步"；
@@ -14,18 +13,18 @@
 
 设计取舍（都是踩过坑之后定的）：
 
-* **并发隔离用 contextvars，绝不用模块级全局变量/threading.local**。项目里已经踩过
+* 并发隔离用 contextvars，绝不用模块级全局变量/threading.local。项目里已经踩过
   "``httpx.AsyncClient`` 连接池绑定事件循环"和"``asyncio.Event`` 跨事件循环复用"导致的
-  **静默挂起**：单事件循环下多个 asyncio 任务共享同一线程，threading.local 根本区分不开
-  它们，于是 A 任务的 span 会被 B 任务当成自己的父节点，trace 树串台且极难定位；
+  静默挂起：单事件循环下多个 asyncio 任务共享同一线程，threading.local 根本区分不开它们，
+  于是 A 任务的 span 会被 B 任务当成自己的父节点，trace 树串台且极难定位；
   跨事件循环时全局变量更是直接泄漏。contextvars 的语义是"每个 asyncio 任务/线程拿到
-  自己的副本"，这正是我们要的隔离粒度。
-* **账本用 ``threading.Lock`` 而不是 ``asyncio.Lock``**。记账是纯内存的微秒级操作，
-  用锁足够；用 asyncio.Lock 会强迫所有调用点变成 ``await``，而且一旦有人忘了 await
-  就是静默失效。锁内**绝不做 IO、绝不 await**，所以不会长时间占用事件循环线程。
-* **账本明细有上限（默认 1000 条）**。长期驻留的 Web 服务不能无界增长，而统计所需的
+  自己的副本"，这正是要的隔离粒度。
+* 账本用 ``threading.Lock`` 而不是 ``asyncio.Lock``。记账是纯内存的微秒级操作，用锁足够；
+  用 asyncio.Lock 会强迫所有调用点变成 ``await``，而且一旦有人忘了 await 就是静默失效。
+  锁内绝不做 IO、绝不 await，所以不会长时间占用事件循环线程。
+* 账本明细有上限（默认 1000 条）。长期驻留的 Web 服务不能无界增长，而统计所需的
   数字在 ``record()`` 时就累加好了，明细只服务于"看最近发生了什么"，因此可以丢老数据。
-* **未知模型的成本算 0，而不是抛异常**。统计模块绝不能因为"模型没登记单价"把主流程搞挂；
+* 未知模型的成本算 0，而不是抛异常。统计模块绝不能因为"模型没登记单价"把主流程搞挂；
   宁可少算也不能让一次综述因为成本核算失败而中断。
 """
 
@@ -65,16 +64,15 @@ __all__ = [
 # 1) 单价表与成本估算
 # ---------------------------------------------------------------------------
 
-#: 单价表：``{模型前缀: (输入单价, 输出单价)}``，单位 **元 / 100 万 token**。
+#: 单价表：``{模型前缀: (输入单价, 输出单价)}``，单位 元 / 100 万 token。
 #:
-#: 重要：单价会变，这里的数字**仅用于量级估算**，以各家官网当期价格为准。
-#: 之所以还是硬编码在代码里、而不是做成配置项：
+#: 单价会变，这里的数字仅用于量级估算，以各家官网当期价格为准。
+#: 硬编码而非配置项的原因：
+#:   - 这是"估算"不是"账单"，差 30% 不影响"这次综述花了多少"的判断；
+#:   - 放进配置会让每个用户都要自己去查价格才能看懂成本面板，得不偿失；
+#:   - 真正的账以云厂商账单为准，这里只回答"是一分钱还是一块钱"。
 #:
-#: * 它是"估算"，不是"账单"，差 30% 不影响"这次综述花了多少"的判断；
-#: * 放进配置会让每个用户都要自己去查价格才能看懂成本面板，得不偿失；
-#: * 真正的账以云厂商账单为准，这里只回答"是一分钱还是一块钱"。
-#:
-#: 本地模型一律 0 价 —— README 里明确承诺"本地推理成本为 0，云端一次综述 2~4 万 token
+#: 本地模型一律 0 价——README 里明确承诺"本地推理成本为 0，云端一次综述 2~4 万 token
 #: 不到一毛钱"。本地跑在用户自己的显卡上，唯一成本是电费，把它算成钱只会让成本面板
 #: 出现无意义的数字，所以 ``ollama`` 全系和任何带 ``:tag`` 的本地模型都是 0。
 PRICES: dict[str, tuple[float, float]] = {
@@ -102,17 +100,17 @@ PRICES: dict[str, tuple[float, float]] = {
 
 
 def _is_local_model(model: str) -> bool:
-    """判断是不是"跑在用户机器上"的本地模型。
+    """判断是不是跑在用户机器上的本地模型。
 
-    判据只有一条：``provider:tag`` 形式的带 tag 模型名（``qwen3:8b``、``llama3.1:70b``）
-    一定是本地推理 —— 云端模型从来不会在 API 里带 ``:tag``。用这一个信号就能覆盖
+    判据：``provider:tag`` 形式的带 tag 模型名（``qwen3:8b``、``llama3.1:70b``）
+    一定是本地推理——云端模型从来不会在 API 里带 ``:tag``。这一个信号就能覆盖
     用户自己 pull 下来的任意模型，不需要维护一份永远追不上的本地模型清单。
     """
     return ":" in model
 
 
 def _match_price(model: str) -> tuple[float, float] | None:
-    """按前缀匹配单价，**最长前缀优先**。
+    """按前缀匹配单价，最长前缀优先。
 
     最长优先是必须的：``deepseek-chat-v3`` 同时匹配 ``deepseek`` 和 ``deepseek-chat``，
     只按字典顺序取第一个会拿到更粗的档位；反过来（先短后长）会把
@@ -136,7 +134,7 @@ def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> flo
 
     * 本地模型 / 带 tag 的本地模型 —— 0.0；
     * 前缀匹配（最长优先），所以 ``deepseek-chat-v3`` 也能命中 ``deepseek-chat``；
-    * **未登记的模型返回 0.0 而不是抛异常**：统计代码在任何情况下都不该把主流程搞挂，
+    * 未登记的模型返回 0.0 而不是抛异常：统计代码在任何情况下都不该把主流程搞挂，
       少算一次成本只是面板偏低，抛异常却会让用户的综述直接失败。
     """
     if _is_local_model(model):
@@ -158,7 +156,7 @@ def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> flo
 
 #: 失败类别全集（顺序即匹配优先级，见 :func:`classify_failure`）。
 #:
-#: 为什么值域固定成这几个字符串：**无法分类的失败等于没有告警**。异常原文里既有
+#: 值域固定成这几个字符串：无法分类的失败等于没有告警。异常原文里既有
 #: HTTP 状态码又有服务端返回的 JSON，直接展示只能靠人一条条读；收敛成有限取值之后
 #: 才能做"rate_limited 突然涨了 10 倍"这种真正的告警，也才能把"翻日志"变成"看面板"。
 FAILURE_KINDS: tuple[str, ...] = (
@@ -175,15 +173,15 @@ FAILURE_KINDS: tuple[str, ...] = (
     "unknown",
 )
 
-#: 关键词规则表：**顺序敏感，先匹配更具体的**。
+#: 关键词规则表：顺序敏感，先匹配更具体的。
 #:
-#: * ``context_overflow`` 必须排在 ``bad_request`` 之前 —— 上下文超长本身就是 400，
+#: * ``context_overflow`` 必须排在 ``bad_request`` 之前——上下文超长本身就是 400，
 #:   但它有明确的处置办法（截断/换模型），混进 bad_request 就再也分不出来了；
 #:   微软/Azure 的报错文案是 "maximum context length"，所以两条都收。
-#: * ``parse`` 排在 ``connection`` 之前 —— 截断的流式响应经常同时出现
+#: * ``parse`` 排在 ``connection`` 之前——截断的流式响应经常同时出现
 #:   "unexpected end of JSON" 和超时字样，这里按"更可行动"的一侧归类：
 #:   解析失败要查 prompt 与响应格式，连接失败要查网络。
-#: * 5xx 放在最后 —— "500 internal server error" 里不含上面的词，但
+#: * 5xx 放在最后——"500 internal server error" 里不含上面的词，但
 #:   "502 bad gateway" 含 "bad gateway"，所以不能把 5xx 排到 bad_request 前面。
 _STRING_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("context_overflow", ("context length", "context_length", "maximum context", "context window",
@@ -210,19 +208,19 @@ _STRING_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 def classify_failure(exc: BaseException | str | None) -> str:
     """把异常/错误文本归类成 :data:`FAILURE_KINDS` 中的一个取值。
 
-    匹配顺序：**异常类型优先，其次关键词，最后 unknown**。
+    匹配顺序：异常类型优先，其次关键词，最后 unknown。
 
     几个刻意的选择：
 
     * ``CancelledError`` 必须按类型先判。它是任务被主动取消（用户点了停止、请求断开），
       不是故障；在 Python 3.8+ 它继承自 ``BaseException`` 而非 ``Exception``，
       ``except Exception`` 根本抓不到它，用字符串判又会因为消息为空而落到 unknown。
-    * ``TimeoutError`` 也按类型先判，而且**必须排在 OSError 之前** —— ``TimeoutError``
+    * ``TimeoutError`` 也按类型先判，而且必须排在 OSError 之前——``TimeoutError``
       是 ``OSError`` 的子类，先判 OSError 会把超时误报成连接失败。Python 3.11 起
       ``asyncio.TimeoutError`` 就是内建 ``TimeoutError`` 的别名，这里一并覆盖。
     * 传 ``None`` 返回 ``""``（空串）而不是 ``"unknown"``：调用方用"没有错误信息"表示
       成功或未采集，返回 unknown 会让 ``by_error_kind`` 里混进一堆假故障。
-    * 未知类型的异常仍归入 ``"unknown"`` 并保留在计数里 —— 宁可承认"我不知道这是什么"
+    * 未知类型的异常仍归入 ``"unknown"`` 并保留在计数里——宁可承认"我不知道这是什么"
       也不要塞进某个已知类别制造假信号。
     """
     if exc is None:
@@ -313,7 +311,7 @@ _MAX_RECENT = 1000
 class UsageLedger:
     """进程内账本：记录每次 LLM 调用，按模型/阶段/运行聚合，并算出人民币成本。
 
-    线程安全：所有读写都在 ``threading.Lock`` 之内，且**锁内不做任何 IO、不 await**，
+    线程安全：所有读写都在 ``threading.Lock`` 之内，且锁内不做任何 IO、不 await，
     因此既能被工作线程（批处理）调用，也能被事件循环里的协程直接调用而不会阻塞别人。
     """
 
@@ -367,8 +365,8 @@ class UsageLedger:
         * ``latency_ms_p50`` / ``latency_ms_p95``
         * ``by_model`` / ``by_phase`` / ``by_error_kind``（每个都是 dict）
 
-        注：这里的统计只覆盖**当前保留的明细**（见 ``max_recent``）；被丢弃的老数据
-        不再参与统计。这是有意的取舍 —— 精确的长期累计应该落到 SQLite，进程内账本
+        注：这里的统计只覆盖当前保留的明细（见 ``max_recent``）；被丢弃的老数据
+        不再参与统计。这是有意的取舍——精确的长期累计应该落到 SQLite，进程内账本
         负责的是"这次运行/今天这批"的量级。
         """
         with self._lock:
@@ -460,14 +458,14 @@ class UsageLedger:
 
 
 def _percentile(sorted_values: list[float], q: float) -> float:
-    """手写分位数（线性插值），``sorted_values`` 必须**已升序**。
+    """手写分位数（线性插值），``sorted_values`` 必须已升序。
 
-    为什么不用 numpy：这是最底层模块，为了一个分位数引入几十 MB 的科学计算栈不划算，
+    不用 numpy：这是最底层模块，为了一个分位数引入几十 MB 的科学计算栈不划算，
     而且它会随平台/版本漂移（打包给用户的便携运行时里多一个二进制依赖就是多一个坑）。
-    为什么用线性插值而不是"取第 k 个"：在只有 3~20 个样本的场景（一次综述的调用次数
+    用线性插值而不是"取第 k 个"：在只有 3~20 个样本的场景（一次综述的调用次数
     就这么点）里，最近邻会把 p95 变成"最大值"，夸大尾部延迟；线性插值至少是连续的。
 
-    空输入返回 0.0（而不是抛异常或 NaN）：空账本是**正常状态**（进程刚起来、还没调用
+    空输入返回 0.0（而不是抛异常或 NaN）：空账本是正常状态（进程刚起来、还没调用
     过模型），成本面板上应该显示 0 而不是崩掉或显示 NaN。
     """
     n = len(sorted_values)
@@ -497,7 +495,7 @@ LEDGER = UsageLedger()
 class Span:
     """一个带耗时的操作节点。
 
-    ``attrs`` 只允许放**可 JSON 序列化的简单值**（str/int/float/bool/None 及它们的
+    ``attrs`` 只允许放可 JSON 序列化的简单值（str/int/float/bool/None 及它们的
     浅层容器）。不要塞 Paper 对象、ORM 行、httpx 响应：span 最终要落 JSONL 和发给前端，
     放活对象会在序列化时炸，而且会把整棵对象图钉在内存里导致泄漏。
     """
@@ -530,7 +528,7 @@ class Span:
 
 # 当前 trace / 当前 span 栈。
 #
-# 用 ContextVar 而不是全局变量：单事件循环下多个 asyncio 任务共享**同一个线程**，
+# 用 ContextVar 而不是全局变量：单事件循环下多个 asyncio 任务共享同一个线程，
 # 全局变量/threading.local 无法区分它们，于是并发任务（本项目里常见：多源检索、
 # 批量摘要）会互相把对方的 span 当成父节点，trace 树串台；跨事件循环时全局变量
 # 还会直接泄漏到别的请求。contextvars 保证"每个任务/线程一份副本"，这正是要的粒度。
@@ -557,9 +555,9 @@ class TraceRecorder:
 
     @contextmanager
     def span(self, name: str, **attrs: Any) -> Iterator[Span]:
-        """开一个 span，支持嵌套；异常时自动标 ``error`` 并记录文本，**仍然向外抛**。
+        """开一个 span，支持嵌套；异常时自动标 ``error`` 并记录文本，仍然向外抛。
 
-        为什么不吞异常：trace 的职责是"记录发生了什么"，不是"决定要不要继续"。
+        不吞异常：trace 的职责是"记录发生了什么"，不是"决定要不要继续"。
         一旦在这里吞掉异常，上层就再也看不到真实失败，会变成更难查的静默错误。
 
         span 的父节点取当前 contextvars 栈顶：同一个协程里嵌套调用天然成树；
@@ -598,13 +596,13 @@ class TraceRecorder:
         }
 
     def to_jsonl(self, path: str | Path) -> None:
-        """把整棵树作为**一行** JSON 追加到 ``path``（JSONL：一行一次运行）。
+        """把整棵树作为一行 JSON 追加到 ``path``（JSONL：一行一次运行）。
 
         刻意用追加而不是覆盖：排障时往往要对比"正常那次"和"失败那次"，
         追加模式下每次运行一行，``select`` 出来直接可比。
 
         编码固定 ``utf-8`` 且 ``ensure_ascii=False``：在 Windows 中文环境下默认编码
-        可能是 cp936，中文 span 名和错误文本会直接乱码或抛 UnicodeEncodeError ——
+        可能是 cp936，中文 span 名和错误文本会直接乱码或抛 UnicodeEncodeError——
         项目里已经因为 .bat 的代码页问题踩过一次，这里不留同样的坑。
         父目录自动创建，调用方不需要先 mkdir。
         """
@@ -655,7 +653,7 @@ class TraceRecorder:
 
         ``trace = create_trace()`` 之后记得在 ``finally`` 里调一次：trace 是绑定在
         contextvars 上的，而一个长期存活的任务（Web 请求、CLI 命令）的上下文是复用的，
-        不解绑就会让下一次操作把 span 挂到上一棵树上 —— 这种"串台"表现为 trace 越来越
+        不解绑就会让下一次操作把 span 挂到上一棵树上——这种"串台"表现为 trace 越来越
         长、耗时归属错乱，而且不会报错。
         """
         set_current_trace(None)
@@ -670,10 +668,10 @@ def create_trace(name: str = "run") -> TraceRecorder:
     这是最常用的入口：``trace = create_trace("review")``，之后同协程/同线程内的
     ``trace.span(...)`` 自动成树，``current_trace()`` 也能拿到它。用完调 ``finish()``。
 
-    **并发隔离从哪来**：asyncio 里每个 ``Task`` 在创建时就拷贝了一份 context，
-    所以 ``asyncio.gather(a(), b())`` 中的两个任务各自绑定自己的 trace，互不可见 ——
+    并发隔离从哪来：asyncio 里每个 ``Task`` 在创建时就拷贝了一份 context，
+    所以 ``asyncio.gather(a(), b())`` 中的两个任务各自绑定自己的 trace，互不可见——
     这正是模块 docstring 里说的"不能靠全局变量"的原因（全局变量下两个任务会互相
-    覆盖对方的 trace）。反过来，**先建 trace 再派生任务**时子任务会继承同一棵 trace，
+    覆盖对方的 trace）。反过来，先建 trace 再派生任务时子任务会继承同一棵 trace，
     这是有意的：那属于同一条调用链，挂在同一棵树上才对。
     """
     recorder = TraceRecorder(name=name)
@@ -696,13 +694,13 @@ def set_current_trace(recorder: TraceRecorder | None) -> Any:
 
 
 def run_in_trace(func: Any, *args: Any, name: str = "run", **kwargs: Any) -> Any:
-    """在**隔离的上下文**里跑 ``func``，返回 ``(结果, trace)``；``func`` 抛异常则原样抛出。
+    """在隔离的上下文里跑 ``func``，返回 ``(结果, trace)``；``func`` 抛异常则原样抛出。
 
     这是批处理/线程池场景的正确姿势：``concurrent.futures`` 的工作线程和
-    ``asyncio.to_thread`` 都**各自持有一份独立的 contextvars 上下文**，所以在里面
-    ``set`` 既不会串到调用方，也不会串到别的工作线程 —— 不需要加锁，也不会串台。
+    ``asyncio.to_thread`` 都各自持有一份独立的 contextvars 上下文，所以在里面
+    ``set`` 既不会串到调用方，也不会串到别的工作线程——不需要加锁，也不会串台。
 
-    一个必须说清的边界：如果直接在**当前**线程调用它，绑定会持续到本上下文结束
+    一个必须说清的边界：如果直接在当前线程调用它，绑定会持续到本上下文结束
     （和 :func:`create_trace` 一样），因此适合"一个工作线程跑一批、跑完线程就复用下一批"
     的用法；如果要在同一上下文里连续跑多段且互不干扰，调用方自己包一层
     ``contextvars.copy_context().run(...)`` 即可获得完全隔离（``copy_context`` 的

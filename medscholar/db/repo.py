@@ -1,4 +1,4 @@
-"""数据库仓储层**门面**（稳定对外接口）。
+"""数据库仓储层门面（稳定对外接口）。
 
 本模块原来的 67 个业务函数已按业务边界拆分到 :mod:`medscholar.db.repositories`：
 
@@ -11,20 +11,18 @@
 * ``repositories/runs.py``       —— 运行记录、阶段快照与产物
 * ``repositories/_common.py``    —— 共享内部助手（``_db`` / FTS 同步 / 过滤 SQL）
 
-**为什么保留本模块**：``medscholar.db.repo`` 的调用点遍布 CLI / HTTP / MCP / 评测脚本
-（20+ 处，``from medscholar.db.repo import ...`` 与 ``repo.xxx(...)`` 两种写法都有），
-一次性改完所有调用点会把"纯搬迁"变成高风险改造。所以这里只留一层**重导出门面**：
+保留本模块的原因：``medscholar.db.repo`` 的调用点遍布 CLI / HTTP / MCP / 评测脚本
+（20+ 处），一次性改完所有调用点会把"纯搬迁"变成高风险改造。这里只留一层重导出门面：
 名字、签名、SQL 与行为与拆分前完全一致，``__all__`` 也逐字未变。
 
-**新代码请直接 import 对应子模块**（例如
+新代码请直接 import 对应子模块（例如
 ``from medscholar.db.repositories.papers import insert_paper``），
-本门面只服务尚未迁移的历史调用点。检索策略（BM25 / KNN / RRF / 元数据过滤）的说明
-随代码搬到了 ``repositories/search.py`` 的模块文档里。
+本门面只服务尚未迁移的历史调用点。
 
-下面每个名字都写成 ``X as X``：这是 PEP 484 的**显式重导出**写法，既让 ruff/pyflakes
-知道它们不是"未使用的导入"，也让读者一眼看出本模块不做任何实现。门面同时保留原先的
-下划线私有名（``_db`` / ``_PAPER_COLUMNS`` ...）：外部已有 ``from .db.repo import _db``
-这类用法，若不再导出会**静默坏掉**。
+下面每个名字都写成 ``X as X``：PEP 484 的显式重导出写法，让 ruff/pyflakes 知道它们
+不是未使用的导入，也让读者一眼看出本模块不做任何实现。门面同时保留原先的下划线私有名
+（``_db`` / ``_PAPER_COLUMNS`` ...）：外部已有 ``from .db.repo import _db`` 这类用法，
+若不再导出会静默坏掉。
 """
 
 from __future__ import annotations
@@ -120,8 +118,8 @@ from .repositories.search import (
     search_vector as search_vector,
 )
 
-# 与拆分前的 repo.__all__ **逐字一致**（内容与顺序都不动）。
-# 注意：它并不覆盖门面导出的全部名字（例如 runs 的几个函数、以及下划线私有名），
+# 与拆分前的 repo.__all__ 逐字一致（内容与顺序都不动）。
+# 它并不覆盖门面导出的全部名字（例如 runs 的几个函数、以及下划线私有名）：
 # 那些名字历史上靠模块属性访问（``repo.get_run(...)``），所以这里照旧导出但不出现在 __all__ 里。
 __all__ = [
     "insert_paper",

@@ -1,15 +1,15 @@
 """Ollama 后端（本地推理）：报文构造、响应解析、分段耗时日志。
 
-作为 **Mixin** 混入 :class:`~medscholar.llm.client.LLMClient`。宿主必须提供：
+作为 Mixin 混入 :class:`~medscholar.llm.client.LLMClient`。宿主必须提供：
 
 * ``self.settings`` —— LLMSettings（model / keep_alive / think / num_ctx …）
 * ``self.client`` —— 已建立的 ``httpx.AsyncClient``（属性，未初始化时会抛 LLMError）
 * ``self._breaker_key`` —— 熔断器标识
 * ``self._resolve_base_url()`` / ``self._record(...)``
 
-为什么拆出来：这两套后端（Ollama 与 OpenAI 兼容）**互不相关**，
+拆出来的原因：Ollama 与 OpenAI 兼容这两套后端互不相关，
 挤在同一个类里会让"改 DeepSeek 的分支要在 Ollama 的代码里找位置"。
-Mixin 让每套后端的实现各自成文件，而宿主类只保留生命周期与路由。
+Mixin 让每套后端的实现各自成文件，宿主类只保留生命周期与路由。
 """
 
 from __future__ import annotations

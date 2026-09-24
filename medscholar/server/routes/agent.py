@@ -1,6 +1,6 @@
 """Agent 工作流路由：``tags=["Agent"]``（运行 / SSE / 审批 / 续跑 / 历史）+ ``tags=["产物"]``。
 
-运行本身由 ``medscholar.agent.runtime`` 的**进程级单例**驱动（见 deps.get_runtime），
+运行本身由 ``medscholar.agent.runtime`` 的进程级单例驱动（见 deps.get_runtime），
 路由只负责把它暴露成 HTTP：启动、推流、审批、取消、查历史、按阶段快照续跑。
 
 历史记录为什么重要：服务重启会清空内存中的运行，而界面仍在等一个永远不会到来的
@@ -111,8 +111,8 @@ async def agent_cancel(run_id: str) -> dict[str, Any]:
 async def agent_runs(limit: int = Query(20, ge=1, le=200)) -> dict[str, Any]:
     """运行列表：内存中的实时运行 + 数据库里的历史记录（含被中断的）。
 
-    历史记录很重要：服务重启会清空内存中的运行，而用户界面仍在等一个
-    永远不会到来的草稿。有了历史，前端就能明确显示"这次运行在综合阶段被中断"。
+    服务重启会清空内存中的运行，而用户界面仍在等一个永远不会到来的草稿。
+    有了历史，前端就能明确显示"这次运行在综合阶段被中断"。
     """
     live = {r["run_id"]: r for r in get_runtime().list_runs(limit=limit)}
     db = get_db()

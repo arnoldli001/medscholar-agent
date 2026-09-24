@@ -8,7 +8,7 @@
                本地 PubMedBERT（``neuml/pubmedbert-base-embeddings``），
                医学语义更强，但需额外安装 torch（约 2GB）。
 ``hashing``    纯 Python 哈希嵌入，无任何外部依赖，仅用于离线自检与
-               无模型环境下的链路验证，**不具备真实语义检索能力**。
+               无模型环境下的链路验证，不具备真实语义检索能力。
 ============== ==========================================================
 
 所有提供方都实现同一接口：``dim`` 属性 + ``async embed(texts) -> list[list[float]]``。
@@ -86,14 +86,12 @@ class EmbeddingProvider(ABC):
 class OllamaEmbedding(EmbeddingProvider):
     """通过 Ollama 的 ``/api/embed`` 生成向量。
 
-    .. important::
-       **不要跨事件循环复用 httpx.AsyncClient。**
-       AsyncClient 的连接池、锁与流都绑定在创建它的那个事件循环上。
-       本项目存在"同步上下文里起一个新循环"的路径（``run_embedding_pipeline``
-       在 worker 线程中 ``asyncio.run``），如果复用主循环创建的 client，
-       请求会**永久挂起**（既不报错也不返回）—— 这是实测踩到的真实故障。
-       因此这里每次调用都新建一个短连接客户端：批量嵌入的次数很少，
-       连接复用带来的收益远小于正确性风险。
+    注意：不要跨事件循环复用 httpx.AsyncClient。AsyncClient 的连接池、
+    锁与流都绑定在创建它的那个事件循环上。``run_embedding_pipeline``
+    会在 worker 线程里 ``asyncio.run`` 起一个新循环，复用主循环创建的
+    client 会让请求永久挂起（不报错也不返回，实测踩到过）。
+    所以这里每次调用都新建短连接客户端：批量嵌入次数很少，
+    连接复用的收益抵不上这个正确性风险。
     """
 
     name = "ollama"
@@ -232,9 +230,9 @@ class SentenceTransformerEmbedding(EmbeddingProvider):
 class HashingEmbedding(EmbeddingProvider):
     """确定性哈希嵌入（无外部依赖）。
 
-    用「词元 → 哈希桶」构造稀疏词袋向量，再叠加字符二元组以缓解未登录词。
-    它**能反映词面重叠**，适合在无模型环境下跑通链路与做回归测试，
-    但**不具备真正的语义泛化能力**，不要用于生产检索质量评估。
+    用「词元 → 哈希桶」构造稀疏词袋向量，再叠加字符二元组缓解未登录词。
+    能反映词面重叠，适合在无模型环境下跑通链路和做回归测试；
+    不具备语义泛化能力，不要用于生产检索质量评估。
     """
 
     name = "hashing"

@@ -1,9 +1,9 @@
 """嵌入层：本地向量生成与增量嵌入管道。
 
-导入本包时会把"入库后自动嵌入"的实现**注册**给数据层
+导入本包时会把"入库后自动嵌入"的实现注册给数据层
 （:func:`medscholar.db.repositories.papers.register_embed_hooks`）。
-这是依赖倒置点：数据层不认识嵌入层，嵌入层主动注册自己，
-因此 ``insert_paper(..., embed=True)`` 依然可用，而依赖图里不再有环。
+数据层不认识嵌入层，嵌入层主动注册自己，
+``insert_paper(..., embed=True)`` 依然可用，依赖图里没有环。
 """
 
 from __future__ import annotations

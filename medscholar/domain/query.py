@@ -11,7 +11,7 @@ OpenAlex               ``search`` 参数是相关度检索，不支持布尔
 Crossref               ``query.bibliographic`` 同样是相关度检索
 ====================== ==========================================================
 
-因此这里先把输入解析成**结构化查询**，再按数据源能力翻译：
+因此这里先把输入解析成结构化查询，再按数据源能力翻译：
 支持布尔的库拿到完整表达式，只做相关度检索的库拿到"核心词"。
 
 输入语法（与 PubMed / Web of Science 的习惯一致，前端会实时回显解析结果）::
@@ -80,9 +80,9 @@ class ParsedQuery:
         return not (self.must or self.any_groups or self.phrases)
 
     def core_terms(self) -> list[str]:
-        """给**不支持布尔**的数据源用的检索词。
+        """给不支持布尔的数据源用的检索词。
 
-        OR 组会把**全部**候选词都带上，而不是只取第一个：OpenAlex / Crossref
+        OR 组会把全部候选词都带上，而不是只取第一个：OpenAlex / Crossref
         这类是相关度检索，多给同义词能让排序更准；只取一个反而丢召回。
         """
         terms = [*self.phrases, *self.must]
@@ -172,7 +172,7 @@ def parse_query(text: str) -> ParsedQuery:
             pending_or = True
             continue
         if lowered in _NOT_WORDS:
-            # 单独的 NOT 关键字：作用于**下一个**词
+            # 单独的 NOT 关键字：作用于下一个词
             pending_not = True
             continue
         if token.startswith("-") and len(token) > 1:

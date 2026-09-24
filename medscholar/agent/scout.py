@@ -1,13 +1,8 @@
-"""Scout Agent —— 检索。
+"""Scout Agent：检索（需求 3.1）。
 
-职责（需求 3.1）：
-
-* 按 Plan 给出的检索式**并发**调用各学术数据源；
-* 跨库去重合并，按相关性整理出候选文献池；
-* 落库（含增量向量嵌入），为后续 Critic / Writer 提供本地可检索的知识库；
-* 对开放获取文献可选抓取全文，供 Reader 深入解析。
-
-单个数据源失败会被隔离并上报，绝不中断整条流水线。
+按 Plan 给出的检索式并发调用各学术数据源，跨库去重合并出候选文献池，
+并落库（含增量向量嵌入），为后续 Critic / Writer 提供本地可检索的知识库。
+单个数据源失败会被隔离并上报，不中断整条流水线。
 """
 
 from __future__ import annotations
@@ -111,7 +106,7 @@ class ScoutAgent:
         per_source = per_source_limit or cfg.agent.max_papers_per_source
         collected: list[Paper] = []
 
-        # 多条检索式**并发**执行。这是纯粹的等待网络，不占 GPU，所以并发是净收益：
+        # 多条检索式并发执行。这是纯粹的等待网络，不占 GPU，所以并发是净收益：
         # 4 条检索式 × 每个数据源 1~3 秒网络往返，串行要等一整轮，并发只等最慢的那条。
         # 单个检索式内部的多数据源并发由 SourceRegistry 负责。
         await emit_event(
@@ -227,7 +222,7 @@ class ScoutAgent:
         self, papers: list[Paper], *, emit: Emitter | None, embed: bool
     ) -> tuple[list[Paper], dict[str, int], dict[str, Any]]:
         """落库并回填 ``paper_id``。"""
-        # 注意：这里必须用 **异步** 版本。run_embedding_pipeline 是同步封装，
+        # 注意：这里必须用异步版本。run_embedding_pipeline 是同步封装，
         # await 它只会得到 "object EmbeddingReport can't be used in 'await' expression"。
         from ..embedding.pipeline import run_embedding_pipeline_async
 

@@ -1,32 +1,26 @@
-"""引用的**支持性**校验：``[n]`` 是否真的支持那句话。
+"""引用支持性校验：``[n]`` 是否真的支持那句话。
 
-与已有的"引用存在性校验"（`formatter.validate_citations`：编号是否指向真实文献）
-的区别：存在性只保证"引用对得上号"，**不保证引用内容支持该论断**。
-"结论被说反了"这类错误能通过存在性校验，但它是医学写作里最严重的错误之一。
+与"引用存在性校验"（`formatter.validate_citations`，只查编号是否指向真实文献）
+不同：存在性不保证引用内容支持该论断，"结论被说反了"这类错误能过存在性校验，
+而它是医学写作里最严重的错误之一。
 
-## 分层设计（这是本模块最重要的约定）
+蕴含判断（entailment）不是正则能做的事，所以分两层，报告中永远分开呈现：
 
-蕴含判断（entailment）本质上不是正则能做的事，所以这里**不假装**一步到位，
-而是分两层，报告中**永远分开呈现**：
-
-* **Tier 0 —— 确定性规则**（无模型、离线、CI 可跑）
-  只抓**高置信度、可复核**的问题：
-  1. ``existence``   编号不存在（兜底，正常已被剔除）
-  2. ``numbers``     论断里的数字在**被引文献里找不到**（编造数据的强信号）
+* Tier 0 —— 确定性规则（无模型、离线、CI 可跑），只抓高置信度、可复核的问题：
+  1. ``existence``   编号不存在（兜底，正常已被上游剔除）
+  2. ``numbers``     论断里的数字在被引文献里找不到（编造数据的强信号）
   3. ``direction``   论断说"显著有效/优于"，而被引文献明确写"无显著差异"
   4. ``overclaim``   用了"证实/治愈/完全"这类超出证据强度的措辞
   5. ``grounding``   论断与被引文献的实词重合度极低（可能引错了文献）
-  规则的取向是**宁可漏报、不可误报** —— 误报会让人不再信任这份报告。
+  取向是宁可漏报、不可误报——误报会让人不再信任这份报告。
 
-* **Tier 1 —— LLM 裁判**（可选，需要模型）
-  逐条给 ``supported / partial / unsupported / contradicted`` + 理由 + 证据片段。
-  已知偏差（必须写进报告，不能藏起来）：
-  - 偏好流畅文本，容易被措辞说服；
-  - 对"部分支持"的判定不稳定；
-  - 单次判定有噪声，因此支持**自一致性检查**（跑两次，不一致的标为 uncertain）。
+* Tier 1 —— LLM 裁判（可选）：逐条给
+  ``supported / partial / unsupported / contradicted`` + 理由 + 证据片段。
+  已知偏差（必须写进报告）：偏好流畅文本、对"部分支持"判定不稳定、
+  单次判定有噪声；支持自一致性检查（跑两次，不一致的标为 uncertain）。
 
-**Tier 0 的通过不等于论断正确**，只说明"没触发已知的高置信度问题模式"。
-报告里必须把这句写出来，否则使用者会把"没报警"当成"已核实"。
+Tier 0 通过不等于论断正确，只说明没触发已知的高置信度问题模式。
+报告里必须写明这句，否则使用者会把"没报警"当成"已核实"。
 """
 
 from __future__ import annotations
@@ -189,7 +183,7 @@ class FaithfulnessReport:
 
     @property
     def supported_rate(self) -> float | None:
-        """tier0 未报警的比例。**这不是"正确率"**，见 notes。"""
+        """tier0 未报警的比例。注意这不是"正确率"，见 notes。"""
         if not self.claims:
             return None
         ok = self.by_verdict.get("supported", 0)
@@ -217,9 +211,9 @@ def extract_claims(draft: str, *, max_claim_chars: int = 400) -> list[Claim]:
 
     两个容易出错的点：
 
-    * **参考文献列表必须排除**：每条以 ``[n]`` 开头，会被误当成带引用的论断，
-      导致报告里出现一堆"数据无法溯源"的假警报；
-    * **中文没有空格**，不能按空格切句，要按中英文句末标点切。
+    * 参考文献列表必须排除：每条以 ``[n]`` 开头，会被误当成带引用的论断，
+      报告里会多出一堆"数据无法溯源"的假警报；
+    * 中文没有空格，不能按空格切句，要按中英文句末标点切。
     """
     claims: list[Claim] = []
     section = ""
@@ -309,9 +303,9 @@ def count_sentences(draft: str) -> tuple[int, int]:
 def _content_words(text: str) -> set[str]:
     """抽实词（两种字符体系的并集），用于"是否有共同主题"这类弱判断。
 
-    注意：**不要在这里重复一遍分词逻辑** —— 之前就是两处实现分头维护，
-    修好了 `_lexical_profile` 却漏了这里，导致同一段文本在两处产出不同的词。
-    现在统一走 `_lexical_profile`，只保留一个事实来源。
+    注意：不要在这里重复分词逻辑。之前两处实现分头维护，
+    修好了 `_lexical_profile` 却漏了这里，同一段文本在两处产出不同的词。
+    现在统一走 `_lexical_profile`，只留一个事实来源。
     """
     profile = _lexical_profile(text)
     return profile["latin"] | profile["cjk"]
@@ -322,15 +316,15 @@ def _is_cjk_token(token: str) -> bool:
 
 
 def _lexical_profile(text: str) -> dict[str, set[str]]:
-    """按**字符体系**分别抽出实词：``{"latin": {...}, "cjk": {...}}``。
+    """按字符体系分别抽出实词：``{"latin": {...}, "cjk": {...}}``。
 
-    为什么要分开：论断与被引文献常常**跨语言**（中文综述引英文文献是常态）。
-    把中文 bigram 与英文单词塞进同一个集合算重合度是"拿橘子和苹果比"——
-    比值天然很低，于是每一条跨语言引用都会被误报为"可能引错了文献"。
-    实测确实如此：修好 CJK 分词后，全部中文论断都被误报。
+    要分开是因为论断与被引文献常跨语言（中文综述引英文文献是常态）。
+    中文 bigram 和英文单词塞进同一个集合算重合度，比值天然很低，
+    每条跨语言引用都会被误报为"可能引错了文献"——实测确实如此：
+    修好 CJK 分词前，全部中文论断都被误报。
 
-    正确做法是**同类比同类**：英文对英文、中文 bigram 对中文 bigram；
-    某一侧在对方语言里没有对应物时，这一类**不做判断**（abstain），
+    做法是同类比同类：英文对英文、中文 bigram 对中文 bigram；
+    某一侧在对方语言里没有对应物时，这一类不做判断（abstain），
     由调用方按"无法核实"处理，而不是指控它有问题。
     """
     groups: dict[str, set[str]] = {"latin": set(), "cjk": set()}
@@ -343,8 +337,8 @@ def _lexical_profile(text: str) -> dict[str, set[str]]:
                 continue
             for index in range(len(token) - 1):
                 gram = token[index : index + 2]
-                # 以虚字**开头**的 bigram 不是实词（汉语复合词几乎不会以「的/了/与/而/等」起头）。
-                # 只判断"两字皆虚"是不够的：那样「的方」「的结」会被当成实词留下。
+                # 以虚字开头的 bigram 不是实词（汉语复合词几乎不会以「的/了/与/而/等」起头）。
+                # 只判断"两字皆虚"不够：那样「的方」「的结」会被当成实词留下。
                 if gram[0] in _CJK_FUNCTION_CHARS:
                     continue
                 if all(ch in _CJK_FUNCTION_CHARS for ch in gram):
@@ -362,19 +356,19 @@ def _overlap_by_script(
 
     Returns:
         ``(最优重合率 或 None, 重合词, 无法判断的字符体系, 是否只靠语言无关信号)``。
-        ``None`` 表示**没有任何可比较的字符体系** —— 此时必须 abstain。
+        ``None`` 表示没有任何可比较的字符体系，此时必须 abstain。
 
-    两类字符体系的门槛**不一样**，这是实测调出来的：
+    两类体系的门槛不同，是实测调出来的：
 
     * 中文（cjk）要求至少 3 个 bigram，否则比例没有统计意义；
-    * 拉丁（latin）只要求 1 个 token —— 因为中文医学文本里的拉丁词几乎都是
-      **术语与缩写**（rTMS / PSD / HAMD / PEDro），它们**不随语言变化**，
+    * 拉丁（latin）只要求 1 个 token：中文医学文本里的拉丁词几乎都是
+      术语与缩写（rTMS / PSD / HAMD / PEDro），不随语言变化，
       是最可靠的语言无关证据。
 
-    这个差异很关键：最初对两类统一要求 ≥3 个词，结果中文综述引英文文献时
+    最初两类统一要求 ≥3 个词，结果中文综述引英文文献时
     （中文论断里通常只有 1~2 个拉丁缩写）被判为"无法比较"，
-    **实测你库里那份真实综述 21 条论断有 17 条因此落进 unverifiable** ——
-    校验器对最主要的真实场景完全失效。放开拉丁侧门槛后才有判断力。
+    实测一份真实综述 21 条论断有 17 条因此落进 unverifiable，
+    校验器对最主要的场景完全失效。放开拉丁侧门槛后才有判断力。
     """
     claim_groups = _lexical_profile(claim_bare)
     source_groups = _lexical_profile(source_text)
@@ -408,7 +402,7 @@ def _overlap_by_script(
             best_overlap = overlap
 
     # 「只靠语言无关信号」：中文这一侧无法比较（或被跳过），但拉丁术语/缩写对上了。
-    # 这种情况**不能**说无法核实，但证据强度确实弱于同语言比对，需要如实标注。
+    # 这种情况不能说无法核实，但证据强度确实弱于同语言比对，需要如实标注。
     script_independent_only = bool(best is not None and latin_matched and cjk_unjudgeable)
     return best, best_overlap, unjudgeable, script_independent_only
 
@@ -443,11 +437,11 @@ def check_claim_rules(
 
     Args:
         sources: ``引用编号 → 可用文本``（摘要或全文）。
-        valid_ids: **确实存在的**引用编号集合。与 ``sources`` 分开是必要的：
+        valid_ids: 确实存在的引用编号集合。与 ``sources`` 分开是必要的：
             "编号不存在"（越界引用）与"编号存在但拿不到文本"（无法核实）
             是两回事，处理方式也不同。``None`` 时退化为"sources 里有键才算存在"。
 
-    取向是**宁可漏报、不可误报**：任何一条都可能被人拿去做判断，
+    取向是宁可漏报、不可误报：任何一条都可能被人拿去做判断，
     误报会让人不再信任这份报告。因此每条规则都要求多个条件同时成立。
     """
     problems: list[dict[str, Any]] = []
@@ -533,7 +527,7 @@ def check_claim_rules(
             })
 
     # --- 规则 5：实词重合度过低（可能引错了文献）
-    #     按字符体系分开比较；没有可比较的一侧时**必须 abstain**，
+    #     按字符体系分开比较；没有可比较的一侧时必须 abstain，
     #     不能因为"中文论断 vs 英文文献"就指控它引错了文献。
     ratio, overlap, unjudgeable, script_only = _overlap_by_script(
         bare, combined_source, min_overlap=min_overlap
@@ -580,13 +574,13 @@ def check_claim_rules(
 def _verdict_from_problems(problems: Sequence[Mapping[str, Any]]) -> str:
     """按最严重的问题决定判定。
 
-    **仲裁顺序是明确的、有意的**（并在文档与标注集里都写出来）：
+    仲裁顺序是明确的（在文档与标注集里都写明）：
     ``existence/numbers`` > ``direction`` > ``overclaim`` > ``grounding``
     > ``unverifiable`` > ``weakly_supported`` > ``supported``。
 
-    为什么 numbers 优先于 direction：编造数字是最硬、最容易复核、后果最严重的问题；
-    而"方向矛盾"有赖于线索词匹配，置信度略低一档。
-    多条规则同时命中时，取**最可执行**的那一条，而不是把判定搅在一起。
+    numbers 优先于 direction：编造数字最硬、最容易复核、后果最严重；
+    而"方向矛盾"依赖线索词匹配，置信度略低一档。
+    多条规则同时命中时，取最可执行的那一条，而不是把判定搅在一起。
     """
     rules = {p.get("rule") for p in problems}
     if "existence" in rules or "numbers" in rules:
@@ -598,7 +592,7 @@ def _verdict_from_problems(problems: Sequence[Mapping[str, Any]]) -> str:
     if "grounding" in rules:
         return "unsupported"
     if "no_source_text" in rules or "cross_lingual" in rules:
-        # 「拿不到文本」与「跨语言且无任何语言无关信号」都属于**无法核实**，
+        # 「拿不到文本」与「跨语言且无任何语言无关信号」都属于无法核实，
         # 不应该被报成"不支持"（那会冤枉一篇可能完全没问题的引用）。
         return "unverifiable"
     if "script_independent_only" in rules:
@@ -648,7 +642,7 @@ async def verify_claims_llm(
     """Tier 1：用 LLM 逐条核查。返回 ``{claim 下标: ClaimVerdict}``。
 
     ``self_consistency=True`` 时每条问两次（不同温度），两次判定不一致的标为
-    ``uncertain`` —— 这是对"裁判本身有噪声"的诚实处理，而不是假装它稳定。
+    ``uncertain``——裁判本身有噪声，不一致就如实标出来。
     """
     from ..config import get_config
     from ..llm.client import LLMError, get_llm
@@ -745,7 +739,7 @@ def analyse_draft(
             tier="tier0",
         )
 
-        # Tier 1 结果与 Tier 0 取**更严重**的一方，并保留两者的信息
+        # Tier 1 结果与 Tier 0 取更严重的一方，并保留两者的信息
         llm = (llm_verdicts or {}).get(index)
         if llm is not None:
             verdict.tier = "tier0+tier1"

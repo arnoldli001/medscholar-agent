@@ -1,11 +1,8 @@
 """DOAJ（Directory of Open Access Journals）客户端。
 
-补的是什么缺口：PubMed / Europe PMC 偏生物医学，OpenAlex 虽然全但不能只筛
-"开放获取期刊"。DOAJ 收录两万余种**完全开放获取**期刊的论文题录，
-对以下情形特别有用：
-
-* 开放获取的综合性/工程/社科期刊论文（PubMed 不收）；
-* 需要"只找能合法拿到全文的文献"时。
+PubMed / Europe PMC 偏生物医学，OpenAlex 不能只筛开放获取期刊。DOAJ 收录
+两万余种完全开放获取期刊的论文题录，适合找 PubMed 不收的 OA 综合/工程/
+社科期刊，或"只要合法全文"的场景。
 
 免费、无需 API Key。接口：``GET https://doaj.org/api/search/articles/{query}``
 文档：https://doaj.org/api/v2/docs
@@ -47,7 +44,7 @@ class DoajClient(BaseClient):
         if not text:
             return []
         page_size = min(_MAX_PAGE, max(1, min(limit, self.settings.page_size)))
-        # DOAJ 把查询串放在**路径**里，不是查询参数
+        # DOAJ 把查询串放在路径里，不是查询参数
         url = f"{self.base_url}/search/articles/{quote(text, safe='')}"
         params: dict[str, Any] = {"pageSize": page_size, "page": 1}
 

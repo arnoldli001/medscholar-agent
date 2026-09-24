@@ -1,12 +1,12 @@
 """评测框架：把语料装进临时库，按多种检索配置跑一遍并对比。
 
-**最重要的设计约束：评测必须跑在生产代码路径上。**
-所以这里直接调用 ``search_fts`` / ``search_vector`` / ``rrf_fuse`` ——
-也就是 ``hybrid_search`` 内部所用的同一组原语，并配一个一致性测试断言
+最重要的约束：评测必须跑在生产代码路径上。
+所以这里直接调用 ``search_fts`` / ``search_vector`` / ``rrf_fuse``——
+即 ``hybrid_search`` 内部所用的同一组原语，并配一个一致性测试断言
 "评测里的 ``production`` 配置 == ``hybrid_search`` 的输出"。
 否则就是在评测一个自己重写的检索器，指标再漂亮也没有意义。
 
-另一个约束：**结果必须可复现**。语料被装进临时数据库，
+另一条约束：结果必须可复现。语料装进临时数据库，
 文献 id 用 1..N 的确定性序号（``source_id``），与用户真实库无关；
 嵌入用同一模型时结果逐位一致。CI 里用 ``hashing`` 提供方，
 因此完全离线、无随机性。
@@ -71,8 +71,8 @@ class RetrievalConfig:
         }
 
 
-#: 消融矩阵。刻意包含"只用一路"与"两路融合"，以及 RRF 的 k 值扫描 ——
-#: 因为"k=60 是论文推荐值"这句话应该被数据检验，而不是被引用。
+#: 消融矩阵。刻意包含"只用一路"与"两路融合"，以及 RRF 的 k 值扫描——
+#: "k=60 是论文推荐值"这类说法应该被数据检验，而不是被引用。
 CONFIGS: tuple[RetrievalConfig, ...] = (
     RetrievalConfig(
         name="bm25-only", use_fts=True, use_vector=False,
@@ -185,7 +185,7 @@ def index_corpus(
     workdir: Path | None = None,
     embed: bool = True,
 ) -> tuple[Database, Path]:
-    """把语料装进一个**临时**数据库（幂等、确定性）。返回 (db, workdir)。
+    """把语料装进一个临时数据库（幂等、确定性）。返回 (db, workdir)。
 
     id 由语料顺序决定（``source_id`` = 1..N），并通过 ``insert_paper`` 真实入库，
     因此走的是与生产完全一样的去重/索引/落库路径。
@@ -383,7 +383,7 @@ def check_regression(
 ) -> list[str]:
     """对照阈值检查是否退化。返回违规说明（空表示通过）。
 
-    阈值写在 CI 里，**只在低于下限时才失败**，因此不会因为"变得更好"而报错。
+    阈值写在 CI 里，只在低于下限时才失败，因此不会因为"变得更好"而报错。
     """
     result = next((r for r in report.results if r.config.name == config_name), None)
     if result is None:
@@ -408,7 +408,7 @@ def verify_production_parity(
 ) -> list[int]:
     """一致性自检：评测里的 ``production`` 配置是否与 ``hybrid_search`` 一致。
 
-    这是"没有评测自己重写的检索器"这句声明的**可执行证据**。
+    这是"没有评测自己重写的检索器"这句声明的可执行证据。
     返回不一致的查询下标（空列表表示完全一致）。
     """
     from ..db.repo import hybrid_search

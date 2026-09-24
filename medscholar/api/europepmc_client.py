@@ -49,8 +49,8 @@ class EuropePMCClient(BaseClient):
         """翻译为 Europe PMC 查询语法（``AND`` + 字段标签）。"""
         parts = [f"({query.strip()})"] if query.strip() else []
         # SRC:PPR = 预印本（medRxiv / bioRxiv / Research Square 等都由 Europe PMC 索引），
-        # 所以**不需要**再单独接一个 medRxiv 客户端：这里已经覆盖了。
-        # 之前这行的注释写成"排除预印本重复"，与实际的 OR 逻辑相反，已更正。
+        # 所以不需要再单独接 medRxiv 客户端。
+        # 之前这行注释写成"排除预印本重复"，与实际的 OR 逻辑相反，已更正。
         parts.append("(SRC:MED OR SRC:PMC OR SRC:PPR OR SRC:AGR OR SRC:PAT)")
         if filters:
             if filters.year_from:
@@ -279,13 +279,13 @@ class EuropePMCClient(BaseClient):
     async def fulltext(self, paper: Paper) -> str:
         """获取开放获取全文纯文本；非 OA 文献一律返回空串（不越权）。
 
-        实测 URL 形态（**踩坑记录**）：
+        实测 URL 形态：
 
         * ``/PMC/{PMCID}/fullTextXML``  → 404
         * ``/MED/{PMID}/fullTextXML``   → 404
-        * ``/{PMCID}/fullTextXML``      → 200，返回 JATS 正文 ✅
+        * ``/{PMCID}/fullTextXML``      → 200，返回 JATS 正文
 
-        即全文端点**不带 source 段**，直接以 PMCID 作为路径；PMID 与 DOI 均不可用。
+        即全文端点不带 source 段，直接以 PMCID 作为路径；PMID 与 DOI 均不可用。
         """
         if not (paper.is_open_access or paper.pmcid):
             return ""

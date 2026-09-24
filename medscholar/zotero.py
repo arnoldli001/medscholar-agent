@@ -1,19 +1,19 @@
 """Zotero 本地库桥接。
 
 为什么这条路径特别合适：你用 Zotero + 学校代理把 PDF 合法收进本地库之后，
-MedScholar 只需要**读本机数据库**就能拿到题录和 PDF 路径，然后对
+MedScholar 只需要读本机数据库就能拿到题录和 PDF 路径，然后对
 "你已经合法持有的文件"做全文提取与索引 —— 不需要任何下载或认证。
 
 实现要点（都是踩过的坑）：
 
-* Zotero 运行时**锁着** ``zotero.sqlite``，直接连会失败或读到不一致状态，
+* Zotero 运行时锁着 ``zotero.sqlite``，直接连会失败或读到不一致状态，
   因此先复制到临时文件再读（只读，绝不写回）；
 * 附件路径形如 ``storage:文件名.pdf``，实际位置是
   ``<data_dir>/storage/<itemKey>/<文件名>``，要按 key 拼出来；
 * 只认 ``storage:`` 附件；``attachments:``（链接附件）指向用户自选的目录，
   这里只记录路径不猜测。
 
-本模块**只读**，不会修改 Zotero 数据。
+本模块只读，不会修改 Zotero 数据。
 """
 
 from __future__ import annotations
@@ -314,7 +314,7 @@ def _read_items(
 def _resolve_attachment(data_dir: Path, item_key: str, path: str) -> str:
     """把 ``storage:文件名.pdf`` 解析成真实路径；解析不了返回空串。
 
-    ``item_key`` 必须是**附件条目自己的 key**：Zotero 的
+    ``item_key`` 必须是附件条目自己的 key：Zotero 的
     ``storage/<目录名>`` 用的是附件 key，而不是父文献的 key。
     传父 key 会永远解析失败 —— PDF 明明在库里，却一个也索引不到。
     """

@@ -65,7 +65,7 @@ def _source_badge(status: dict[str, Any]) -> str:
 def _wait_for_port(host: str, port: int, timeout: float = 40.0) -> bool:
     """轮询直到端口真的开始接受连接。
 
-    **不要用固定 sleep 再开浏览器。** 早期实现是 ``threading.Timer(1.5, open)``，
+    不要用固定 sleep 再开浏览器。 早期实现是 ``threading.Timer(1.5, open)``，
     但 uvicorn 从启动到监听通常要 2~4 秒（要导入模块、初始化数据库与向量表）。
     浏览器在服务还没监听时就打开，前端首屏的每个请求都会 "Failed to fetch"，
     用户看到的是满屏"无法连接后端服务"。实测确认过这个时序问题。
@@ -205,7 +205,7 @@ async def _doctor_async(args: argparse.Namespace) -> int:
                 "      → 云端模式：在 config.yaml 配置 llm.provider=deepseek 与 llm.api_key"
             )
     except (asyncio.TimeoutError, TimeoutError):
-        # 注意：asyncio.TimeoutError 的字符串表示是**空串**，
+        # 注意：asyncio.TimeoutError 的字符串表示是空串，
         # 早期实现 f"LLM 探测失败：{exc}" 会输出"LLM 探测失败："后面什么都没有，
         # 让人完全无法判断发生了什么。
         line(cfg.llm.provider, False, "探测超时（60 秒无响应）")

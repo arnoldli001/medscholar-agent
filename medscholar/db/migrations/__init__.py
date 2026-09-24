@@ -3,7 +3,7 @@
 包结构（各自职责单一，避免变成一个 god module）：
 
 * :mod:`medscholar.db.migrations.base` —— 迁移的抽象（``Migration`` /
-  ``MigrationError`` / ``@migration`` 注册装饰器）与**定义期校验**；
+  ``MigrationError`` / ``@migration`` 注册装饰器）与定义期校验；
 * :mod:`medscholar.db.migrations.registry` —— 本项目的迁移清单（M0001 基线、
   M0002 …）。新增迁移只改这一个文件；
 * :mod:`medscholar.db.migrate` —— 执行器（``MigrationRunner`` / ``apply_migrations``

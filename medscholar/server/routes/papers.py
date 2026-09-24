@@ -1,6 +1,6 @@
 """文献库路由（``tags=["文献库"]``）：列表、详情、删除、本地检索、导入、全文与速读。
 
-这里的接口全部围绕**本地知识库**中的文献对象，不联网、不启动 Agent 工作流
+这里的接口全部围绕本地知识库中的文献对象，不联网、不启动 Agent 工作流
 （联网检索在 ``search.py``，综述生成在 ``agent.py``）。
 """
 
@@ -113,7 +113,7 @@ async def papers_search(req: LocalSearchRequest) -> dict[str, Any]:
 async def papers_import(req: ImportRequest) -> dict[str, Any]:
     """导入题录文件（RIS / BibTeX / EndNote 标记 / WoS 纯文本 / CSV）。
 
-    用于把 Web of Science、Scopus、Embase、CNKI、万方 等**导出**的题录
+    用于把 Web of Science、Scopus、Embase、CNKI、万方 等导出的题录
     搬进本地库。只解析用户提供的文件，不联网、不使用任何账号。
     """
     from ...importers import import_text

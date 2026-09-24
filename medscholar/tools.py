@@ -6,7 +6,7 @@
 
 设计约定：
 
-* 输入输出**只使用可无损 JSON 化的数据**（不返回 ORM/连接对象）；
+* 输入输出只使用可无损 JSON 化的数据（不返回 ORM/连接对象）；
 * 每个工具都自行捕获异常并返回 ``{"ok": false, "error": ...}``，
   避免一个工具失败导致整个 Agent 会话崩溃。
 """
@@ -106,7 +106,7 @@ async def _search_knowledge_base(
     year_to: int | None = None,
     open_access_only: bool = False,
 ) -> dict[str, Any]:
-    """在**本地知识库**中做混合检索（BM25 + 向量 + RRF 融合）。"""
+    """在本地知识库中做混合检索（BM25 + 向量 + RRF 融合）。"""
     from .retrieval import search_knowledge_base as kb_search
 
     filters: dict[str, Any] = {}
@@ -169,7 +169,7 @@ async def _library_stats() -> dict[str, Any]:
 
 
 async def _fetch_fulltext(paper_id: int) -> dict[str, Any]:
-    """抓取某篇**开放获取**文献的全文（Europe PMC JATS → PMC → OA PDF）。"""
+    """抓取某篇开放获取文献的全文（Europe PMC JATS → PMC → OA PDF）。"""
     paper = get_paper(int(paper_id))
     if paper is None:
         return {"ok": False, "error": f"未找到文献 paper_id={paper_id}"}

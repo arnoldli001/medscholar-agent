@@ -75,7 +75,7 @@ class SearchFilters:
 class TokenBucket:
     """异步令牌桶限流器。
 
-    数据源的公开速率限制是**硬约束**（超限会被封或降级），因此这里按
+    数据源的公开速率限制是硬约束（超限会被封或降级），按
     ``SourceSettings.rps`` 严格控制；桶容量固定为 1，避免突发流量触发 429。
     """
 
@@ -149,7 +149,7 @@ class BaseClient(ABC):
             self._client_loop = asyncio.get_running_loop()
 
     async def _ensure_client(self) -> None:
-        """确保客户端存在且属于**当前**事件循环。
+        """确保客户端存在且属于当前事件循环。
 
         httpx.AsyncClient 连接池绑定创建它的循环；跨循环复用会让请求永久挂起。
         客户端会被注册表长期缓存，因此每次请求前都校验一次循环归属。
@@ -189,8 +189,8 @@ class BaseClient(ABC):
     ) -> Any:
         """带令牌桶限流 + 指数退避重试的请求。
 
-        * 429 / 5xx / 网络错误 → 指数退避重试（含抖动），并尊重 ``Retry-After``
-        * 4xx（除 429）→ 立即抛出 :class:`SourceError`，不浪费时间重试
+        429 / 5xx / 网络错误 → 指数退避重试（含抖动），并尊重 ``Retry-After``。
+        4xx（除 429）→ 立即抛出 :class:`SourceError`，不浪费时间重试。
         """
         clean_params = {k: v for k, v in (params or {}).items() if v is not None}
         last_error: Exception | None = None
@@ -203,7 +203,7 @@ class BaseClient(ABC):
         #     Accept: text/xml         → 406
         #     Accept: application/xml  → 200
         #     Accept: */*              → 200
-        # 这个坑曾让**整条开放获取全文管道全部失效**（99 篇有 PMCID 的一篇都取不到），
+        # 这个坑曾让整条开放获取全文管道全部失效（99 篇有 PMCID 的一篇都取不到），
         # 因此对非 JSON 请求统一改用 `*/*`。
         send_headers = dict(headers or {})
         if expect != "json":

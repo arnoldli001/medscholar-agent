@@ -1,13 +1,12 @@
-"""LangGraph 风格的四节点工作流（需求 3.2）。
+"""四节点工作流编排（需求 3.2）。
 
 ::
 
     [Plan] → [用户审批] → [Execute] → [Reflect] → [Synthesize] → [Review] → 成稿
 
-实现说明：本项目不需要 LangGraph 的持久化图状态机（单机、单用户、
-运行期状态全在内存里），因此用等价的 **async 编排 + 事件流** 实现同一语义，
-既保持了四节点的清晰边界，又避免了为一个线性流程引入重依赖。
-每个节点都是独立方法，可单独测试与替换。
+本项目不需要 LangGraph 的持久化图状态机（单机、单用户、运行期状态全在内存），
+故用等价的 async 编排 + 事件流实现同一语义，避免为一个线性流程引入重依赖。
+每个节点是独立方法，可单独测试与替换。
 """
 
 from __future__ import annotations
@@ -389,7 +388,7 @@ class ResearchGraph:
         await emit_event(emit, "status", message=message)
         await emit_event(emit, "critique", **result.to_dict())
 
-        # 重新挑选并**重编号**：保证正文 [n] 与参考文献表严格一一对应
+        # 重新挑选并重编号：保证正文 [n] 与参考文献表严格一一对应
         selected = state.select_papers(
             max_papers=self.config.agent.writer_max_papers, use_critique=True
         )

@@ -103,7 +103,7 @@ def coerce_str_list(value: Any) -> list[str]:
 class Paper:
     """一篇文献的规范化元数据。
 
-    数据库 ``papers`` 表与本类的字段一一对应；``raw`` 仅用于调试，不落库。
+    ``papers`` 表字段与本类一一对应；``raw`` 仅用于调试，不落库。
     """
 
     title: str

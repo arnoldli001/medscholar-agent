@@ -1,14 +1,11 @@
-"""Writer Agent —— 综述与摘要生成。
+"""Writer Agent：综述与摘要生成（需求 3.1）。
 
-职责（需求 3.1）：基于评估后的文献材料生成带引用的综述正文、章节、
-摘要与结论。写作全程**流式输出**，前端可以边生成边阅读。
+基于评估后的文献材料流式生成带引用的综述正文、章节、摘要与结论。
 
-引用纪律（本模块最重要的约束）：
-
-* 正文里的 ``[n]`` 只能使用 :class:`~medscholar.agent.state.AgentState`
-  中 ``citation_map`` 里真实存在的编号；
-* 写作完成后由 :class:`~medscholar.agent.formatter.FormatterAgent`
-  统一校验并剔除越界引用，绝不把幻觉编号留在成稿里。
+引用约束：正文里的 ``[n]`` 只能用
+:class:`~medscholar.agent.state.AgentState` 的 ``citation_map`` 里存在的
+编号；成稿后由 :class:`~medscholar.agent.formatter.FormatterAgent`
+统一校验并剔除越界引用，避免幻觉编号留在成稿里。
 """
 
 from __future__ import annotations
@@ -58,9 +55,8 @@ logger = logging.getLogger(__name__)
 __all__ = ["WriterAgent", "DEFAULT_OUTLINE"]
 
 #: 材料块按"论文数上限 / 单篇摘要字数"逐档收缩，直到给正文留出足够上下文。
-#: 这不是锦上添花：num_ctx 是提示词与输出的**共享**预算（本地 8 GB 显存下
-#: 只能开到 8192），材料塞满就会把正文挤没。
-#: 第一档的极大值表示"不限制篇数"，即先试最丰富的材料。
+#: num_ctx 是提示词与输出的共享预算（本地 8 GB 显存下只能开到 8192），
+#: 材料塞满就会把正文挤没。第一档的极大值表示不限篇数，先试最丰富的材料。
 _DIGEST_LADDER: tuple[tuple[int, int], ...] = (
     (1_000_000, 800),
     (1_000_000, 500),
@@ -166,9 +162,9 @@ class WriterAgent:
         """逐章节撰写综述，返回完整 Markdown 草稿。
 
         Args:
-            on_token: ``async def on_token(text: str)`` —— 流式回调。
-            min_chars / max_chars: **单节**目标字数（未给 total_* 时生效）。
-            total_min_chars / total_max_chars: **整篇正文**的目标字数区间，
+            on_token: ``async def on_token(text: str)`` 流式回调。
+            min_chars / max_chars: 单节目标字数（未给 total_* 时生效）。
+            total_min_chars / total_max_chars: 整篇正文的目标字数区间，
                 给出后按章节数均分到每一节。
         """
         if not entries:
@@ -193,7 +189,7 @@ class WriterAgent:
             system_prompt=SECTION_SYSTEM,
         )
         prompt_tokens = estimate_tokens(digest) + estimate_tokens(SECTION_SYSTEM)
-        # 剩余可生成量：绝不能让提示词把输出挤到 0（早期"只写了几百字"就有这个原因）
+        # 剩余可生成量：不能让提示词把输出挤到 0（早期"只写了几百字"就有这个原因）
         headroom = max(MIN_HEADROOM, self.config.llm.num_ctx - prompt_tokens - TOKEN_RESERVE)
         token_cap = max(MIN_TOKEN_CAP, min(want_tokens, headroom, MAX_TOKEN_CAP))
         logger.info(

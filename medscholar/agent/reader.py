@@ -1,18 +1,14 @@
-"""Reader Agent —— 全文解析与精读。
+"""Reader Agent：全文解析与精读（需求 3.1）。
 
-职责（需求 3.1）：
+按「Europe PMC JATS → PubMed PMC → OA PDF」获取开放获取文献全文，
+解析成纯文本落入 ``paper_fulltext``（含 FTS5 索引），并生成单篇速读笔记
+（研究设计 / 对象 / 干预 / 结局 / 局限）。非开放获取文献只保留元数据与
+出版商链接，不绕过付费墙。PDF 解析依赖可选的 PyMuPDF，未安装时给出
+安装指引而不是静默失败。
 
-* 获取**开放获取**文献全文（Europe PMC JATS → PubMed PMC → OA PDF），
-  非开放获取文献只保留元数据与出版商链接，绝不绕过付费墙；
-* 把全文解析成纯文本并落入 ``paper_fulltext``（同时建立 FTS5 索引）；
-* 生成单篇速读笔记（研究设计 / 对象 / 干预 / 结局 / 局限）。
-
-PDF 解析依赖可选的 PyMuPDF；未安装时给出明确的安装指引而不是静默失败。
-
-**分层说明**：PDF 解析、落地页 PDF 定位、失败归类这些**基础设施**能力已搬到
-:mod:`medscholar.importers.pdf`，本模块从那里导入并继续对外重导出。
-原因见该模块的 docstring —— 简单说：Zotero 附件导入（infrastructure）也要读 PDF，
-把它们留在应用层会让基础设施反向依赖上层。
+PDF 解析、落地页 PDF 定位、失败归类这些基础设施能力在
+:mod:`medscholar.importers.pdf`，本模块导入并重导出：Zotero 附件导入
+（infrastructure）也要读 PDF，留在应用层会让基础设施反向依赖上层。
 """
 
 from __future__ import annotations
@@ -129,9 +125,9 @@ class ReaderAgent:
     async def fetch_fulltext(self, paper: Paper, *, persist: bool = True) -> FullTextResult:
         """按「Europe PMC → PubMed PMC → OA PDF」顺序取全文。
 
-        失败时返回的 ``error`` 必须说明**真正试过什么、卡在哪一步**。
+        失败时返回的 ``error`` 要说明真正试过什么、卡在哪一步。
         早期实现无论哪一步失败都回落到同一句"该文献非开放获取"，
-        对有 PMCID 的文献是**误导性**的 —— 会让人以为该文献本就不该有全文。
+        对有 PMCID 的文献是误导——会让人以为该文献本就不该有全文。
         这里逐级记录尝试轨迹。
         """
         paper_id = paper.paper_id or 0
@@ -170,8 +166,8 @@ class ReaderAgent:
                     paper, text, "pubmed-pmc", f"https://www.ncbi.nlm.nih.gov/pmc/articles/{paper.pmcid}/", persist
                 )
 
-        # 3) Unpaywall：按 DOI 找**合法**的开放获取副本。
-        #    很多文献只有 DOI（既无 PMCID 也没标 OA），这条是它们唯一的希望；
+        # 3) Unpaywall：按 DOI 找合法的开放获取副本。
+        #    很多文献只有 DOI（既无 PMCID 也没标 OA），这是它们唯一的全文路径；
         #    Unpaywall 只返回 OA 链接，不涉及任何认证绕过。
         if paper.doi:
             tried.append("Unpaywall")
@@ -251,14 +247,13 @@ class ReaderAgent:
     async def _fetch_pdf(self, paper: Paper, *, persist: bool) -> FullTextResult:
         """下载并解析开放获取 PDF。
 
-        两个要点：
+        两点实测约束：
 
-        1. **出版商普遍拒绝自动化下载**（实测 ScienceDirect 403、部分机构仓储 405），
-           这是对方的风控策略，不是本程序的缺陷，也不应该去绕过；
-        2. **数据源给的链接常常是文章网页而不是 PDF**（实测占失败原因的 27%）。
-           遇到 HTML 时再解析一层：用出版商为学术搜索声明的标准
-           ``citation_pdf_url`` 元数据定位真正的 PDF 地址后重试。
-           —— 实测能显著提高成功率。
+        1. 出版商普遍拒绝自动化下载（ScienceDirect 403、部分机构仓储 405），
+           属对方风控策略，不绕过；
+        2. 数据源给的链接常是文章网页而非 PDF（约占失败原因的 27%）。
+           遇到 HTML 时用出版商为学术搜索声明的标准 ``citation_pdf_url``
+           元数据定位真正的 PDF 地址后重试，实测能明显提高成功率。
         """
         url = paper.full_text_url
         paper_id = paper.paper_id or 0

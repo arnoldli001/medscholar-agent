@@ -13,7 +13,7 @@
 * 对外只暴露 :meth:`LLMClient.chat` / :meth:`stream` / :meth:`chat_json`；
 * Ollama 的 ``think`` 开关默认关闭 —— Qwen3 系列默认会输出大段思维链，
   在流式 UI 里既慢又吵，需要时可通过配置打开；
-* :meth:`chat_json` 对模型输出做**容错解析**（剥离 ```json 围栏、截取首个
+* :meth:`chat_json` 对模型输出做容错解析（剥离 ```json 围栏、截取首个
   平衡的花括号块、容忍尾随逗号），因为本地小模型几乎不会严格输出纯 JSON。
 """
 
@@ -65,8 +65,8 @@ class _Usage:
 class LLMClient(OllamaBackend, OpenAIBackend):
     """按配置路由到具体后端的统一客户端。
 
-    出网调用的**重试与熔断**在 :mod:`medscholar.llm.transport`，
-    **耗时与 token 记账**在 :mod:`medscholar.platform.observability`；
+    出网调用的重试与熔断在 :mod:`medscholar.llm.transport`，
+    耗时与 token 记账在 :mod:`medscholar.platform.observability`；
     本类只负责"报文长什么样、错误文案怎么说"。
     """
 
@@ -93,7 +93,7 @@ class LLMClient(OllamaBackend, OpenAIBackend):
     async def start(self) -> None:
         """建立 HTTP 客户端；顺带做 provider/model 一致性校验。
 
-        校验放在这里而不是配置加载时，是为了让**任何**调用路径（Web / CLI / MCP）
+        校验放在这里而不是配置加载时，是为了让任何调用路径（Web / CLI / MCP）
         都能得到同一条可照做的中文提示，而不是各自去撞云端返回的英文 400。
         """
         if self._client is None:
@@ -120,8 +120,8 @@ class LLMClient(OllamaBackend, OpenAIBackend):
         """对话方法自动确保已初始化，避免调用方忘记 ``await start()``。
 
         同时检测事件循环是否变化：``httpx.AsyncClient`` 的连接池绑定在创建它的
-        循环上，若被跨循环复用，请求会**永久挂起**（这是实测踩到的真实故障，
-        触发路径是在 worker 线程里 ``asyncio.run`` 跑一个同步封装的异步流程）。
+        循环上，若被跨循环复用，请求会永久挂起（实测踩到的故障：
+        在 worker 线程里 ``asyncio.run`` 跑一个同步封装的异步流程）。
         检测到循环变化就丢弃旧客户端并重建。
         """
         loop = asyncio.get_running_loop()
@@ -180,9 +180,9 @@ class LLMClient(OllamaBackend, OpenAIBackend):
     ) -> None:
         """记一次调用到全局账本 + 本地累计器。
 
-        **成功与失败都记**：只统计成功调用会得到"平均耗时很漂亮、实际体验很差"的
+        成功与失败都记：只统计成功调用会得到"平均耗时很漂亮、实际体验很差"的
         假象（慢的往往正是失败重试的那几次）。失败时 token 记 0，
-        但耗时与错误分类照记，这样"哪个阶段在烧钱/在超时"才看得出来。
+        但耗时与错误分类照记，"哪个阶段在烧钱/在超时"才看得出来。
 
         阶段（plan/execute/reflect/synthesize）与运行号从当前 trace 上下文推断，
         调用方不必为了记账多传参数。账本是纯内存操作，不会拖慢主流程。
