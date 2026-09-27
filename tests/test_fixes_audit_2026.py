@@ -206,6 +206,85 @@ def test_non_boolean_source_strips_negation():
 
 
 # ---------------------------------------------------------------------------
+# 2b. P0-2 同族缺陷：分组括号与 ANDNOT 也被当成检索词
+#     同一根因（"解析器接受的词表 ⊊ 上游实际会发来的词表"）的三次复发。
+#     所以测试按**往返性质**断言，而不是只钉住某一条查询。
+# ---------------------------------------------------------------------------
+
+PAREN_QUERIES = [
+    # LLM 真实会写的分组写法（取自生产 plan 快照的形态）
+    "rTMS AND post-stroke depression AND (HAMD OR MADRS) AND (randomized OR RCT)",
+    "rTMS AND post-stroke depression AND (meta-analysis OR systematic review)",
+    '(rTMS OR "transcranial magnetic stimulation") AND depression',
+    "accelerated rTMS AND (efficacy OR safety OR outcomes)",
+]
+
+
+@pytest.mark.parametrize("query", PAREN_QUERIES)
+def test_grouping_parens_never_become_search_terms(query):
+    """分组括号必须被剥离，不能混进检索词。
+
+    原缺陷：``(meta-analysis`` 与 ``review)`` 会作为"检索词"发到上游——
+    搜的是带括号的字面串，既搜不到也不报错。更糟的是 ``(rTMS OR …)`` 会解析出
+    ``must=[')']``，翻译时产生空组 ``()``。
+    """
+    parsed = parse_query(query)
+    terms = [*parsed.must, *parsed.phrases, *(t for g in parsed.any_groups for t in g)]
+    for term in terms:
+        assert "(" not in term and ")" not in term, (
+            f"括号混进了检索词：{term!r}（must={parsed.must} any={parsed.any_groups}）"
+        )
+
+
+@pytest.mark.parametrize("query", PAREN_QUERIES)
+@pytest.mark.parametrize("source", ["pubmed", "europepmc", "openalex", "crossref"])
+def test_grouped_query_translation_has_no_malformed_shapes(query, source):
+    """分组查询翻译后不得含空组、非中缀连接符或未配平括号。"""
+    expr = for_source(query, source)
+    assert expr
+    assert not re.search(r"\(\s*\)", expr), f"出现空组：{expr!r}"
+    assert expr.count("(") == expr.count(")"), f"括号不配平：{expr!r}"
+    _OP = r"(?:AND|OR|NOT|ANDNOT)"
+    for pattern in (
+        rf"^\s*\(*\s*{_OP}\b",
+        rf"\b{_OP}\s*\)*\s*$",
+        rf"\(\s*{_OP}\b",
+        rf"\b{_OP}\s*\)",
+        rf"\b{_OP}\s+{_OP}\b",
+    ):
+        assert not re.search(pattern, expr), f"连接符在非法位置（{pattern}）：{expr!r}"
+
+
+def test_arxiv_andnot_is_a_connector_not_a_term():
+    """``ANDNOT`` 是 arxiv 的排除语法；它作为输入时必须被当连接符，
+    否则会变成检索词且**丢失排除语义**（`-动物` 变成"必须含 ANDNOT 和 动物"）。"""
+    parsed = parse_query("rTMS ANDNOT 动物")
+    assert "ANDNOT" not in [t.upper() for t in parsed.must]
+    assert "动物" not in parsed.must, "ANDNOT 后的词应被排除而不是必须包含"
+
+
+def test_parenthesized_or_group_becomes_any_group():
+    """分组语义：`(a OR b)` 应被识别为 any_group（任选其一），而不是两个必须词。"""
+    parsed = parse_query("depression AND (HAMD OR MADRS)")
+    assert parsed.must == ["depression"]
+    assert parsed.any_groups == [["HAMD", "MADRS"]], f"OR 组未成形：{parsed.any_groups}"
+
+
+def test_flat_model_documented_limitation():
+    """已知边界（诚实记录，不是缺陷）：本解析器用平铺模型
+    （must 合取 + any_groups + exclude），**无法表达嵌套分组**。
+
+    ``(meta-analysis OR systematic review)`` 里的 ``review`` 会被拆成必须词，
+    OR 组只剩 ``[meta-analysis, systematic]``。这类输入退化为"更严格"的查询
+    （多一个必须词），而不是垃圾查询——取向是宁可少召回，也不把畸形表达式
+    发到上游。
+    """
+    parsed = parse_query("(meta-analysis OR systematic review)")
+    assert parsed.must == ["review"], f"实际：{parsed.must}"
+    assert parsed.any_groups == [["meta-analysis", "systematic"]]
+
+
+# ---------------------------------------------------------------------------
 # 3. P0-4: trace/span 在生产路径必须有接线（账本 phase/run_id 非空）
 # ---------------------------------------------------------------------------
 

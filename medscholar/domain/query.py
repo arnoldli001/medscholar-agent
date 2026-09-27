@@ -93,7 +93,13 @@ def _strip_quotes(token: str) -> str:
 
 
 def _tokenize(raw: str) -> list[str]:
-    """切分词元：空格/逗号=AND 相邻，分号插入 | 标记（OR），引号整体保留不切。"""
+    """切分词元：空格/逗号=AND 相邻，分号插入 | 标记（OR），引号整体保留不切。
+
+    **括号切成独立 token**（P0-2 同族缺陷）：LLM 会自然地写
+    ``(HAMD OR MADRS)`` 这种分组，若括号黏在词上，``(meta-analysis`` 与
+    ``review)`` 会变成两个"检索词"发到上游 API——搜的是带括号的字面串，
+    既搜不到东西也不报错。引号里的括号属于短语内容，必须保留。
+    """
     out: list[str] = []
     for chunk in _TOKEN_RE.findall(raw):
         if chunk.startswith('"'):
@@ -103,7 +109,13 @@ def _tokenize(raw: str) -> list[str]:
         for index, part in enumerate(parts):
             if index:
                 out.append("|")
-            out.extend(p for p in re.split(r"[,，]", part) if p.strip())
+            for piece in re.split(r"[,，]", part):
+                if not piece.strip():
+                    continue
+                # 把 () （） 拆成独立 token，其余按空白切
+                for sub in re.split(r"([()（）])", piece):
+                    if sub.strip():
+                        out.append(sub.strip())
     return out
 
 
@@ -152,6 +164,18 @@ def parse_query(text: str) -> ParsedQuery:
             # 显式 AND：分隔符，不入词，也不与前词拼成新组；
             # 同时把 pending_or/pending_not 清零，避免与前一个 OR/NOT 标记复合。
             pending_or = pending_not = False
+            continue
+        # 独立括号是分组标记，不是检索词：解析器的结构化模型（must + any_groups +
+        # exclude 的合取式）已经隐含了分组语义，跳过括号即可；
+        # 否则会出现 must=[')'] 这种把括号当词、以及序列化出空组 ``()`` 的畸形。
+        if token in {"(", ")", "（", "）"}:
+            pending_or = pending_not = False
+            continue
+        # `ANDNOT` 是 arxiv 的**排除**语法，语义等同 NOT（作用于下一个词）。
+        # 不能只当分隔符跳过——那会把"排除动物"变成"必须包含动物"，是语义反转。
+        if lowered == "andnot":
+            pending_or = False
+            pending_not = True
             continue
         if lowered in _NOT_WORDS:
             # 单独的 NOT 关键字：作用于下一个词
@@ -291,20 +315,46 @@ def for_source(query: str | ParsedQuery, source: str) -> str:
         expression = f"{expression} {operator} ({negated})" if len(parsed.exclude) > 1 else (
             f"{expression} {operator} {_quote_if_needed(parsed.exclude[0])}"
         )
-    # 输出合法性自检：AND/OR/NOT 旁边紧邻同一种运算符 = 翻译器 bug。
-    # 历史上的 bug：parse_query 不识别 AND → for_source 拼出 "(... AND AND ...)"，
-    # Europe PMC 返回 hitCount=0（HTTP 200，静默空结果）。守在这里，
-    # 一旦再次触发，立即报错而不是把坏表达式送出去。
+    # 输出合法性自检：**这份检查本身也踩过同一类坑**——第一版只查
+    # "AND AND" 之类双运算符，漏了空组 ``()``，于是 ``(a OR b) AND c`` 这种
+    # 输入解析出一堆括号词后，翻译出的 ``() AND c`` 顺利通过自检发到了上游。
+    # 教训：守卫的词表必须覆盖**所有**畸形形态，不能只覆盖你刚修的那一个。
     if expression:
-        for double in ("AND AND", "OR OR", "NOT NOT", "(AND ", "(OR ", "(NOT ", " AND)"):
-            if double in f" {expression} ":
+        malformed = ("AND AND", "OR OR", "NOT NOT", "ANDNOT ANDNOT",
+                     "(AND ", "(OR ", "(NOT ", " AND)", " OR)")
+        for bad in malformed:
+            if bad in f" {expression} ":
                 raise AssertionError(
-                    f"翻译后的检索式含畸形序列 {double!r}：{expression!r}"
+                    f"翻译后的检索式含畸形序列 {bad!r}：{expression!r}"
                     f"——parse_query 或 for_source 出错，请检查 tokens 解析。"
                 )
-        # 括号必须配平（每开括号必有对应闭括号）。
         if expression.count("(") != expression.count(")"):
+            raise AssertionError(f"翻译后的检索式括号不配平：{expression!r}")
+        # 空组 / 空单元：`()`、`( )`
+        if re.search(r"\(\s*\)", expression):
             raise AssertionError(
-                f"翻译后的检索式括号不配平：{expression!r}"
+                f"翻译后的检索式含空组：{expression!r}"
+                f"——通常是分组标记被当成了检索词（括号未剥离）。"
             )
+        # 连接符出现在**非中缀**位置才算畸形：开头/结尾/紧邻括号/两个相连。
+        # 注意不能简单查 " OR " —— `(HAMD OR MADRS)` 里的中缀 OR 是合法的
+        # （第一版断言就是这么误报的，把正常表达式拦下来了）。
+        _OP = r"(?:AND|OR|NOT|ANDNOT)"
+        bad_positions = (
+            rf"^\s*\(*\s*{_OP}\b",          # 以连接符开头
+            rf"\b{_OP}\s*\)*\s*$",          # 以连接符结尾
+            rf"\(\s*{_OP}\b",               # 紧跟在左括号后
+            rf"\b{_OP}\s*\)",               # 紧贴在右括号前
+            rf"\b{_OP}\s+{_OP}\b",          # 两个连接符相连
+        )
+        for pattern in bad_positions:
+            if re.search(pattern, expression):
+                raise AssertionError(
+                    f"翻译后的检索式在非法位置出现连接符（{pattern}）：{expression!r}"
+                    f"——通常是分组标记被当成了检索词，或运算符未被识别。"
+                )
+        # 裸括号不能作为检索词（引号内除外）：粗筛 —— 出现 `(词` 或 `词)` 且该侧是
+        # 空白的组合已被上面覆盖；这里防"整个表达式只有括号与连接符"的退化情形。
+        if not re.search(r"[\w\u4e00-\u9fff]", expression):
+            raise AssertionError(f"翻译后的检索式没有实际检索词：{expression!r}")
     return expression

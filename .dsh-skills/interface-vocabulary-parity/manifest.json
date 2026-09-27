@@ -1,0 +1,60 @@
+{
+  "name": "interface-vocabulary-parity",
+  "version": "1.0.0",
+  "produced_by": "medscholar-agent audit session (2026-09-27)",
+  "purpose": "防止 AI 结对编码产生的'成对函数接缝处违反性质'类缺陷；把这类缺陷变成可机械检查的性质",
+  "intended_consumers": [
+    "未来 AI agent（DeepSeek / MiniMax / Claude / GPT 等）写或审成对模块时",
+    "人类工程师 review AI 生成的解析器/序列化器配对时"
+  ],
+  "scope": {
+    "applies_when": [
+      "写或改一对方向相反的函数：parse/serialize、encode/decode、build/parse、validate/produce",
+      "写'输出合法性自检'",
+      "为'喂给外部系统'的字符串/报文写测试",
+      "审阅 AI 一次生成的成对模块"
+    ],
+    "does_not_apply": [
+      "单个独立函数的实现",
+      "纯 UI/配置改动",
+      "已有成熟 schema 校验（protobuf/JSON Schema）覆盖的报文"
+    ]
+  },
+  "origin_defect": {
+    "summary": "parse_query 与 for_source 由 AI 一次生成；序列化器发出的词表严格大于解析器接受的词表",
+    "symptom": "上游 API 返回 HTTP 200 + 命中 0 条；日志记成功；无任何告警",
+    "recurrences": 3,
+    "recurrence_detail": [
+      "显式 AND 未被识别 -> 翻译出 '(a AND AND b)'",
+      "分组括号未被剥离 -> 检索词里混入 '(x' / 'y)'，并产生空组 '()'",
+      "ANDNOT 被当分隔符 -> 排除语义反转为必须包含"
+    ],
+    "guard_also_failed": "第一版输出自检只查双运算符，漏了空组 '()'，缺陷穿过自检发到上游",
+    "impact_measured": {
+      "europepmc": "7 次成功请求 / 累计命中 0 条",
+      "contrast_sources": "pubmed 8 次/62 条、openalex 6 次/180 条、crossref 8 次/240 条",
+      "live_api_check": "客户端构造的表达式 hitCount=0；去掉 'AND AND' 后同一表达式 hitCount=157"
+    }
+  },
+  "key_lessons": [
+    "性质 A：parse(serialize(x)) 必须语义等价于 parse(x)——发现能力最强",
+    "性质 B：守卫按'位置'枚举畸形，不按具体串枚举；守卫本身要有测试（防误报+防漏报）",
+    "性质 C：测试用例复杂度必须 >= 真实输入复杂度；输入从生产快照取",
+    "最危险的变体是语义反转（排除<->包含），比'搜不到'严重得多",
+    "AI 擅长把单个函数写对，不擅长保证两个函数之间的性质——接缝是人/下一个 AI 的价值所在"
+  ],
+  "anti_patterns_avoided": [
+    "只测每个函数各自对不对",
+    "守卫只覆盖刚修的那一个形态",
+    "测试用例手写得很干净",
+    "假设畸形输入会被外部系统拒绝",
+    "把复合记号（ANDNOT）当普通分隔符",
+    "文档只写支持哪些语法、不写上游实际会发来什么"
+  ],
+  "related_skills": ["audit-repair-discipline"],
+  "trigger_conditions": [
+    "存在或即将存在一对方向相反的函数",
+    "产出会被外部系统消费（API 查询串、报文、DSL）",
+    "AI 在一次生成里写完了两侧"
+  ]
+}
