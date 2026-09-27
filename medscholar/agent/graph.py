@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable, Sequence
 
 from ..cite import detect_style
 from ..config import AppConfig, get_config
+from ..platform.observability import TraceRecorder, create_trace
 from ..constants import (
     DIGEST_MAX_ABSTRACT_REVIEW,
     DIGEST_MAX_ABSTRACT_REVISE,
@@ -98,6 +99,10 @@ class ResearchGraph:
                 "status",
                 message=f"从「{state.resumed_from}」阶段继续，已完成的阶段不再重跑",
             )
+        # 把整个工作流包进一棵 trace 树，让 LLMUsage 的 phase/run_id 自动回填——
+        # 否则 observability 里这两列永远是空串（之前 P0-4 缺陷的原因）。
+        trace = create_trace(f"agent.run:{state.run_id}")
+        trace.root.attrs.update({"run_id": state.run_id, "topic": state.topic[:80]})
         try:
             state.phase = Phase.PLAN
             await emit_event(emit, "phase", phase=Phase.PLAN.value, label=Phase.PLAN.label)
@@ -229,6 +234,14 @@ class ResearchGraph:
                 elapsed_ms=state.elapsed_ms,
                 summary=state.summary(),
             )
+            # 关闭 trace：解绑当前上下文并落盘 JSONL，兜底 P0-4（账本 phase/run_id 为空）。
+            try:
+                trace.finish()
+                jsonl_path = getattr(self.config, "trace_jsonl", None)
+                if jsonl_path:
+                    trace.to_jsonl(jsonl_path)
+            except Exception:  # pragma: no cover - 遥测失败绝不影响主流程
+                logger.debug("trace 落盘失败", exc_info=True)
         return state
 
     # ============================================================ 节点实现

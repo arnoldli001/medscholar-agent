@@ -132,16 +132,32 @@ def export_markdown(
     if references:
         lines.append("## 参考文献")
         lines.append("")
-        lines.append(format_reference_list(references, style))
+        lines.append(_format_refs_with_indices(references, style))
         lines.append("")
     return "\n".join(lines)
+
+
+def _format_refs_with_indices(
+    references: Sequence[Any], style: str
+) -> str:
+    """导出器接收的 ``references`` 可能是 ``Sequence[Paper]`` 或 ``Sequence[(index, Paper)]``；
+    后者保留与正文一致的编号（与 formatter.build_references 同契约）。"""
+    if not references:
+        return ""
+    if isinstance(references[0], tuple) and len(references[0]) == 2:
+        indices = [int(idx) for idx, _p in references]
+        papers = [_p for _idx, _p in references]
+    else:
+        indices = None
+        papers = list(references)
+    return format_reference_list(papers, style, indices=indices)
 
 
 def export_docx_compatible_html(
     *,
     title: str,
     content: str,
-    references: Sequence[Paper] = (),
+    references: Sequence[Any] = (),
     style: str = "gb7714",
 ) -> str:
     """生成可直接粘贴进 Word 的 HTML（保留标题层级与参考文献表）。"""
@@ -150,7 +166,7 @@ def export_docx_compatible_html(
     if references:
         items = "".join(
             f"<p style='margin:0 0 6pt 0;text-indent:-21pt;padding-left:21pt;'>{_escape(line)}</p>"
-            for line in format_reference_list(references, style).splitlines()
+            for line in _format_refs_with_indices(references, style).splitlines()
             if line.strip()
         )
         refs_html = f"<h2>参考文献</h2>{items}"

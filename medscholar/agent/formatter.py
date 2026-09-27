@@ -123,15 +123,23 @@ class FormatterAgent:
         *,
         only_cited: str | None = None,
     ) -> str:
-        """生成参考文献表；``only_cited`` 传入正文时只输出正文真正引用过的条目。"""
+        """生成参考文献表；``only_cited`` 传入正文时只输出正文真正引用过的条目。
+
+        关键契约：**编号不丢失**。entries 是 ``[(引用编号, Paper), ...]``，
+        即使经过 only_cited 过滤，``[n]`` 在正文中对应的编号也必须原样保留到参考文献表里
+        （不能 ``enumerate(papers, start=1)`` 重新从 1 编号，否则会出现"正文 [16] 指向表第 1 条"
+        的错位）。这条契约由 ``tests/test_formatter_alignment.py`` 守住。
+        """
         style = detect_style(style)
-        papers = [paper for _index, paper in entries]
+        pairs: list[tuple[int, Paper]] = [(int(i), p) for i, p in entries]
         if only_cited is not None:
             cited = set(extract_citations(only_cited))
-            kept = [paper for index, paper in entries if index in cited]
+            kept = [(index, paper) for index, paper in pairs if index in cited]
             if kept:
-                papers = kept
-        return format_reference_list(papers, style)
+                pairs = kept
+        papers = [paper for _index, paper in pairs]
+        indices = [index for index, _paper in pairs]
+        return format_reference_list(papers, style, indices=indices)
 
     def reference_entries(
         self, entries: Sequence[tuple[int, Paper]], style: str = "gb7714"

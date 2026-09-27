@@ -161,13 +161,41 @@ class LLMClient(OllamaBackend, OpenAIBackend):
         error_kind: str = "",
     ) -> None:
         """记账到全局 LEDGER 与本地累计器，成功失败都记（失败 token=0 但耗时/错误照记，
-        否则重试耗时会被统计掩盖）。阶段与 run_id 从当前 trace 上下文推断。"""
+        否则重试耗时会被统计掩盖）。阶段与 run_id 从当前 trace 上下文推断。
+
+        当调用方没建 trace（P0-4 缺陷的现场）时，从调用栈推断一个 phase 标签：
+        取最近一个 agent/ 下的方法名作为 phase、``_record`` 自身的调用者作为 trace_id 的 fallback。
+        这避免 observability 里两列长期为空。
+        """
         latency_ms = (time.monotonic() - started) * 1000
         if ok:
             self.calls += 1
             self.usage.add(prompt_tokens, completion_tokens)
         span = current_span()
         trace = current_trace()
+        phase = span.name if span is not None else ""
+        run_id = trace.trace_id if trace is not None else ""
+        # 调用栈推断（P0-4 兜底）
+        if not phase or not run_id:
+            try:
+                import inspect as _inspect
+                frame = _inspect.currentframe()
+                # 跳过 _record 自身 + 客户端方法 + 后端方法
+                for _ in range(8):
+                    if frame is None:
+                        break
+                    frame = frame.f_back
+                inferred_phase = ""
+                if frame is not None:
+                    fn = frame.f_code.co_qualname or frame.f_code.co_name
+                    # WriterAgent.write_review -> "write_review"；agent.run -> "agent.run"
+                    inferred_phase = fn.split(".")[-1]
+                if inferred_phase and not phase:
+                    phase = inferred_phase
+                if frame is not None and not run_id:
+                    run_id = f"untraced:{frame.f_code.co_filename.split('medscholar')[-1]}:{frame.f_lineno}"
+            except Exception:  # pragma: no cover - 栈推断失败绝不影响记账
+                pass
         LEDGER.record(
             LLMUsage(
                 provider=self.settings.provider,
@@ -176,8 +204,8 @@ class LLMClient(OllamaBackend, OpenAIBackend):
                 completion_tokens=completion_tokens,
                 latency_ms=latency_ms,
                 ok=ok,
-                phase=span.name if span is not None else "",
-                run_id=trace.trace_id if trace is not None else "",
+                phase=phase,
+                run_id=run_id,
                 error_kind=error_kind,
             )
         )

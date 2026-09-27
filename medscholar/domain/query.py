@@ -30,6 +30,10 @@ SUPPORTED_SYNTAX_HELP = (
 # 用于切分：先按引号切，保留引号内容
 _TOKEN_RE = re.compile(r'"[^"]*"|\S+')
 _OR_WORDS = {"or", "或者", "｜"}
+# AND 是显式连接符，必须识别为"分隔符"而非词：之前漏识会让 for_source 拼出
+# "(rTMS AND AND ...)" 的双重 AND，Europe PMC 对此返回 hitCount=0（HTTP 200，
+# 静默空结果；见回归测试 tests/test_query_alignment.py）。
+_AND_WORDS = {"and", "且", "&"}
 _NOT_WORDS = {"not", "-", "排除", "非"}
 _SEPARATORS = re.compile(r"[,，]")
 
@@ -144,6 +148,11 @@ def parse_query(text: str) -> ParsedQuery:
         if lowered in _OR_WORDS or token == "|":
             pending_or = True
             continue
+        if lowered in _AND_WORDS:
+            # 显式 AND：分隔符，不入词，也不与前词拼成新组；
+            # 同时把 pending_or/pending_not 清零，避免与前一个 OR/NOT 标记复合。
+            pending_or = pending_not = False
+            continue
         if lowered in _NOT_WORDS:
             # 单独的 NOT 关键字：作用于下一个词
             pending_not = True
@@ -255,7 +264,13 @@ def for_source(query: str | ParsedQuery, source: str) -> str:
         return ""
 
     if source not in BOOLEAN_SOURCES:
-        # 相关度检索数据源：给全部核心词（OR 组同义词全带上，多给词排序更准、不丢召回）
+        # 相关度检索数据源：给全部核心词（OR 组同义词全带上，多给词排序更准、不丢召回）。
+        # exclude 不在本地 FTS 里参与（_build_filters 无排除项），但 remote relevance
+        # 检索也容易把 -xxx 当普通词参与匹配——先在文本里剔除负向词，剩下的再 core_text()。
+        if parsed.exclude:
+            bad = {x.lower() for x in parsed.exclude}
+            terms = [t for t in parsed.core_terms() if t.lower() not in bad]
+            return " ".join(terms) if terms else parsed.core_text()
         return parsed.core_text()
 
     units: list[str] = []
@@ -276,4 +291,20 @@ def for_source(query: str | ParsedQuery, source: str) -> str:
         expression = f"{expression} {operator} ({negated})" if len(parsed.exclude) > 1 else (
             f"{expression} {operator} {_quote_if_needed(parsed.exclude[0])}"
         )
+    # 输出合法性自检：AND/OR/NOT 旁边紧邻同一种运算符 = 翻译器 bug。
+    # 历史上的 bug：parse_query 不识别 AND → for_source 拼出 "(... AND AND ...)"，
+    # Europe PMC 返回 hitCount=0（HTTP 200，静默空结果）。守在这里，
+    # 一旦再次触发，立即报错而不是把坏表达式送出去。
+    if expression:
+        for double in ("AND AND", "OR OR", "NOT NOT", "(AND ", "(OR ", "(NOT ", " AND)"):
+            if double in f" {expression} ":
+                raise AssertionError(
+                    f"翻译后的检索式含畸形序列 {double!r}：{expression!r}"
+                    f"——parse_query 或 for_source 出错，请检查 tokens 解析。"
+                )
+        # 括号必须配平（每开括号必有对应闭括号）。
+        if expression.count("(") != expression.count(")"):
+            raise AssertionError(
+                f"翻译后的检索式括号不配平：{expression!r}"
+            )
     return expression

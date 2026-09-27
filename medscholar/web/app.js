@@ -4016,7 +4016,7 @@ function refreshMetrics(opts) {
     clear(box);
     box.appendChild(el('p', { class: 'empty-hint', text: '加载中…' }));
   }
-  api.metrics().then(function (data) {
+  API.metrics().then(function (data) {
     renderMetricsDetail(data);
   }).catch(function (err) {
     clear(box);

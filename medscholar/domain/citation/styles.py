@@ -309,26 +309,50 @@ def format_reference_list(
     *,
     numbered: bool | None = None,
     sort: str = "cited",
+    indices: Sequence[int] | None = None,
 ) -> str:
     """生成整份参考文献表。numbered=None 时按样式决定（数字制加序号）；
-    sort: cited 保持引用顺序 / author 按作者 / year 按年份降序。"""
+    sort: cited 保持引用顺序 / author 按作者 / year 按年份降序。
+
+    ``indices`` 可显式传入每篇文献的外部编号（与正文 [n] 对应的那个 n）；
+    传 None 时按 enumerate(items, start=1) 重编号。**正文 + 参考文献表必须使用同一套编号**，
+    所以经 ``build_references(..., only_cited=...)`` 过滤后必须显式传 indices，
+    否则会出现"正文 [16] 指向表第 1 条"的错位。
+    """
     style = detect_style(style)
     items = [p for p in papers if p]
+    if indices is not None and len(indices) != len(items):
+        raise ValueError(
+            f"indices 长度 {len(indices)} 与 papers 长度 {len(items)} 不一致；"
+            "参考文献表的编号必须与调用方传入的完全对应。"
+        )
     if style in {"bibtex", "ris"}:
         joiner = "\n\n" if style == "bibtex" else "\n"
         return joiner.join(format_citation(p, style) for p in items)
 
     if sort == "author":
-        items = sorted(items, key=lambda p: (split_author(p.authors[0])[0].lower() if p.authors else "zzz"))
+        order = sorted(
+            range(len(items)),
+            key=lambda k: (split_author(items[k].authors[0])[0].lower() if items[k].authors else "zzz"),
+        )
+        items = [items[k] for k in order]
+        if indices is not None:
+            indices = [indices[k] for k in order]
     elif sort == "year":
-        items = sorted(items, key=lambda p: -(p.pub_year or 0))
+        order = sorted(range(len(items)), key=lambda k: -(items[k].pub_year or 0))
+        items = [items[k] for k in order]
+        if indices is not None:
+            indices = [indices[k] for k in order]
 
     if numbered is None:
         numbered = style in {"vancouver", "gb7714", "chicago"}
 
+    if indices is None:
+        indices = list(range(1, len(items) + 1))
+
     lines: list[str] = []
-    for i, paper in enumerate(items, start=1):
-        lines.append(format_citation(paper, style, index=i if numbered else None))
+    for index, paper in zip(indices, items):
+        lines.append(format_citation(paper, style, index=index if numbered else None))
     return "\n".join(lines)
 
 
