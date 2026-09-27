@@ -61,6 +61,8 @@ def search_fts(
         sql += f" AND {where}"
     sql += " ORDER BY score LIMIT ?"
 
+    # P1-1：三路并集候选
+    merged: dict[int, float] = {}
     strategies: list[str] = []
     for candidate in (
         build_match_query(query, cjk="phrase"),
@@ -76,11 +78,23 @@ def search_fts(
         except sqlite3.OperationalError as exc:
             logger.warning("FTS 检索失败（%s，策略 %d）：%s", query, index + 1, exc)
             continue
-        if rows:
-            if index:
-                logger.debug("FTS 采用第 %d 级放宽策略命中 %d 条：%s", index + 1, len(rows), query)
-            return [(int(r["paper_id"]), float(r["score"])) for r in rows]
-    return []
+        # P1-1：三路并集，不再短路。phrase/bigram-AND/bigram-OR 命中各放一段，
+        # 上层 RRF 融合后真正排序；bigram-OR 候选数通常 5~10x 多于前两路，删除它
+        # 会让召回腰斩（评测集每查询只 1 篇 relevant 时不易发现）。
+        for r in rows:
+            pid = int(r["paper_id"])
+            # score 取最高（多次命中保留最佳）
+            score = float(r["score"])
+            if pid not in merged:
+                merged[pid] = score
+            else:
+                if score < merged[pid]:
+                    merged[pid] = score
+    if not merged:
+        return []
+    # 按 score 排序（bm25 越负越相关），截到 limit
+    out = sorted(merged.items(), key=lambda kv: (kv[1], kv[0]))[:limit]
+    return out
 
 
 def search_fulltext(
@@ -242,11 +256,19 @@ def hybrid_search(
     papers = get_papers_by_ids([pid for pid, _ in fused], db=database)
 
     results: list[ScoredPaper] = []
+    # P2-5：RRF 分数恒正且落在 [1/(k+N), 2/(k+1)]，绝对阈值恒不触发。
+    # 改为"相对阈值"：min_score 解释为"相对最大 RRF 分的比例"，min_score=0 关闭；
+    # 默认 0.35（保留 top-35% 的命中），按查询长度 / IDF 尺度自适应。
+    if fused:
+        max_rrf = max((s for _pid, s in fused), default=0.0)
+        threshold = max_rrf * cfg.retrieval.min_score_ratio
+    else:
+        threshold = 0.0
     for paper_id, score in fused:
         paper = papers.get(paper_id)
         if paper is None:
             continue
-        if score < cfg.retrieval.min_score:
+        if cfg.retrieval.min_score_ratio > 0 and score < threshold:
             continue
         matched = []
         if paper_id in fts_rank:
@@ -283,6 +305,37 @@ def log_search(entry: SearchLogEntry, *, db: Database | None = None) -> int:
             ),
         )
         return int(cur.lastrowid or 0)
+
+
+def log_searches(entries: Sequence[SearchLogEntry], *, db: Database | None = None) -> int:
+    """P2-10：批量写入 search_logs。一次事务写 N 条记录。
+
+    scout.search_plan 在一轮检索里会产生 ``len(queries) * len(sources)`` 条
+    （如 4 检索式 × 6 源 = 24 条），原来每条一次 BEGIN IMMEDIATE 事务，
+    改成批量后 1 次事务。``new_count`` 字段在批量场景填 0（逐源新增是合并后的数），
+    若需要精确统计 caller 自己算。
+    """
+    if not entries:
+        return 0
+    database = _db(db)
+    rows = [
+        (
+            e.query,
+            e.source,
+            e.result_count,
+            e.new_count,
+            e.duration_ms,
+            e.error or None,
+        )
+        for e in entries
+    ]
+    with database.transaction() as conn:
+        cur = conn.executemany(
+            "INSERT INTO search_logs(query, source, result_count, new_count, duration_ms, error) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        return int(cur.rowcount or 0)
 
 
 def recent_searches(*, limit: int = 20, db: Database | None = None) -> list[dict[str, Any]]:
@@ -338,3 +391,44 @@ def search_log_summary(
         if not queries
         else list(queries),
     }
+
+
+def purge_old_search_logs(
+    *, older_than_days: int = 90, keep_recent: int = 200, db: Database | None = None
+) -> int:
+    """P2-11：保留策略 — 删除旧检索日志，避免 search_logs 无界增长。
+
+    默认保留最近 200 条 + 90 天内的全部。
+    - 早于 ``older_than_days`` 天的：删除
+    - 90 天内的但总数超过 ``keep_recent`` 的：删到剩 ``keep_recent`` 条为止
+
+    单用户本地工具场景下，调用频次远低于云端，90 天 + 200 条的默认足矣。
+    返回删除行数。
+    """
+    database = _db(db)
+    with database.transaction() as conn:
+        cur = conn.execute(
+            "DELETE FROM search_logs WHERE created_at < "
+            "(datetime('now', ?))",
+            (f"-{int(older_than_days)} days",),
+        )
+        deleted_age = cur.rowcount or 0
+        # 保留最新 keep_recent 条；超出全部删除（不论 created_at）
+        total = conn.execute("SELECT COUNT(*) c FROM search_logs").fetchone()["c"]
+        deleted_extra = 0
+        if total > keep_recent:
+            keep_ids = [
+                r["id"]
+                for r in conn.execute(
+                    "SELECT id FROM search_logs ORDER BY id DESC LIMIT ?",
+                    (keep_recent,),
+                ).fetchall()
+            ]
+            if keep_ids:
+                marks = ",".join("?" for _ in keep_ids)
+                cur = conn.execute(
+                    f"DELETE FROM search_logs WHERE id NOT IN ({marks})",
+                    keep_ids,
+                )
+                deleted_extra = cur.rowcount or 0
+        return int(deleted_age) + int(deleted_extra)

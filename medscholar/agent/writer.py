@@ -6,9 +6,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from ..config import AppConfig, get_config
 from ..constants import (
@@ -69,14 +70,33 @@ def _fit_digest(
     num_ctx: int,
     want_output_tokens: int,
     system_prompt: str,
+    fulltext_by_id: Mapping[int, str] | None = None,
+    fulltext_chars: int = 1500,
 ) -> str:
-    """在上下文预算内构造材料块：优先保正文篇幅，其次保材料丰富度。"""
+    """在上下文预算内构造材料块：优先保正文篇幅，其次保材料丰富度。
+
+    P0-3 修复：接受 ``fulltext_by_id`` 通道，把已抓到的全文片段附在摘要后面。
+    阶梯档位里把 ``fulltext_chars`` 也按比例收缩——大档位多给字、小档位少给字，
+    避免"档位 1 加了全文导致预算爆掉"。
+    """
     budget = num_ctx - want_output_tokens - estimate_tokens(system_prompt) - TOKEN_RESERVE
     budget = max(MIN_BUDGET, budget)
     digest = ""
-    for papers_cap, abstract in _DIGEST_LADDER:
+    for cap_index, (papers_cap, abstract) in enumerate(_DIGEST_LADDER):
         subset = list(entries[:papers_cap])
-        digest = build_context_digest(subset, max_abstract=abstract)
+        # 按档位同步收缩全文片段长度：越大档给得越多
+        per_pass_chars = (
+            fulltext_chars if fulltext_by_id else 0
+        )
+        if fulltext_by_id and cap_index > 0:
+            # 大档给完整预算；小档（cap_index=0）给一半，给首档留余地
+            per_pass_chars = max(200, fulltext_chars // (cap_index + 1))
+        digest = build_context_digest(
+            subset,
+            max_abstract=abstract,
+            fulltext_by_id=fulltext_by_id,
+            fulltext_chars=per_pass_chars,
+        )
         if estimate_tokens(digest) <= budget:
             break
     return digest
@@ -94,8 +114,45 @@ DEFAULT_OUTLINE: tuple[tuple[str, tuple[str, ...]], ...] = (
 class WriterAgent:
     """写作智能体。"""
 
-    def __init__(self, *, config: AppConfig | None = None) -> None:
+    def __init__(self, *, config: AppConfig | None = None, db: Any = None) -> None:
         self.config = config or get_config()
+        self._db = db  # 可选：用于 P0-3 接入全文时按 paper_id 拉 paper_fulltext
+
+    def _load_fulltext_map(
+        self, entries: Sequence[tuple[int, Paper]]
+    ) -> dict[int, str]:
+        """P0-3：按 paper_id 批量取全文；没有 fulltext 或没传 db 的 entry 直接跳过。
+
+        用 ``asyncio.to_thread`` 包同步 SQLite 调用，避免 P0-6（async 路径同步 SQLite）。
+        """
+        if self._db is None:
+            return {}
+        ids = [p.paper_id for _idx, p in entries if p.paper_id]
+        if not ids:
+            return {}
+        try:
+            from ..db.repo import get_fulltext
+
+            async def _load() -> dict[int, str]:
+                loop = asyncio.get_running_loop()
+                fulltexts: dict[int, str] = {}
+                for pid in ids:
+                    text = await loop.run_in_executor(None, get_fulltext, pid, self._db)
+                    if text and text.strip():
+                        fulltexts[pid] = text
+                return fulltexts
+
+            return asyncio.run(_load())
+        except RuntimeError:
+            # 不在事件循环里——直接同步调，CLI / 评测脚本走这条路径
+            from ..db.repo import get_fulltext
+
+            fulltexts: dict[int, str] = {}
+            for pid in ids:
+                text = get_fulltext(pid, db=self._db)
+                if text and text.strip():
+                    fulltexts[pid] = text
+            return fulltexts
 
     # ---------------------------------------------------------------- 大纲
     async def refine_outline(
@@ -160,6 +217,10 @@ class WriterAgent:
 
         ``on_token`` 为流式回调；给出 total_min/max_chars 整篇目标区间时按章节数均分，
         否则用单节 min_chars/max_chars。
+
+        P0-3 修复：构造材料时，若 self._db 可用且 entry 含 paper_id，按
+        ``db_get_paper_fulltext`` 一次性取出所有相关全文；没有 fulltext 的自动跳过，
+        不影响原有"只看摘要"路径。
         """
         if not entries:
             return (
@@ -176,11 +237,15 @@ class WriterAgent:
 
         # qwen3 中文实测约 1.7 字/token，据此估单节输出 token 并留余量
         want_tokens = int(max_chars / CHARS_PER_TOKEN) + TOKEN_SAFETY_MARGIN
+        # P0-3：拉全文（P0-3 决策：接上全文而不是摘掉预取链路）
+        fulltext_by_id = self._load_fulltext_map(entries)
         digest = _fit_digest(
             entries,
             num_ctx=self.config.llm.num_ctx,
             want_output_tokens=want_tokens,
             system_prompt=SECTION_SYSTEM,
+            fulltext_by_id=fulltext_by_id,
+            fulltext_chars=2000,
         )
         prompt_tokens = estimate_tokens(digest) + estimate_tokens(SECTION_SYSTEM)
         # 剩余可生成量：不能让提示词把输出空间挤到 0

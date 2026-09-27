@@ -223,7 +223,17 @@ class AgentRuntime:
             self._execute(handle, run_config), name=f"medscholar-run-{state.run_id}"
         )
 
-        self._runs[state.run_id] = handle
+        # P0-5 幂等：先 setdefault，避免并发 start() 同时跑两个 task。
+        # 若该 run_id 已有活句柄（不应发生，但防御性保留），回滚并报错。
+        existing = self._runs.setdefault(state.run_id, handle)
+        if existing is not handle:
+            # 极端竞态：另一个 start() 抢在我们之前。取消我们刚建的 task。
+            handle.task.cancel()
+            logger.warning(
+                "start(%s)：发现已有活句柄（status=%s），回滚本次启动",
+                state.run_id, existing.status,
+            )
+            return existing
         self._prune()
         # 落库运行进度，服务重启后仍可追溯
         try:
@@ -241,7 +251,18 @@ class AgentRuntime:
         return handle
 
     async def resume(self, run_id: str) -> RunHandle:
-        """从阶段快照继续被中断的运行：已完成阶段直接复用，不因断线重来（检索与撰写成本很高）。"""
+        """从阶段快照继续被中断的运行：已完成阶段直接复用，不因断线重来（检索与撰写成本很高）。
+
+        P0-5 修复：调用方可能在内存里已有活句柄（前端刷新后重新连上 SSE、`/latest` 给出
+        误判）—— 再次调用 ``resume()`` 会覆盖句柄、旧 task 仍在审批 Future 上永远不被
+        resolve、``_prune`` 看不到。**幂等性**：发现活句柄时直接返回它而不是创建新 task。
+        """
+        # P0-5 幂等检查：发现活句柄时直接返回，避免并发两个 task + 句柄泄漏
+        existing = self._runs.get(run_id)
+        if existing is not None and not existing.closed:
+            logger.info("resume(%s)：发现活句柄（status=%s），直接返回", run_id, existing.status)
+            return existing
+
         row = await asyncio.to_thread(db_get_run, run_id, db=self.db)
         if not row:
             raise ValueError(f"运行 {run_id} 不存在，无法继续。")
@@ -495,12 +516,20 @@ class AgentRuntime:
         return [h.to_dict() for h in handles]
 
     async def stream(
-        self, run_id: str, *, timeout: float = STREAM_TIMEOUT_SECONDS
+        self,
+        run_id: str,
+        *,
+        timeout: float = STREAM_TIMEOUT_SECONDS,
+        after_ts: str | float | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """事件流：先补播历史再实时跟随，直到 ``done``。
 
         不用 ``asyncio.Event`` 唤醒：Event/Future 绑定创建时的事件循环，
         跨循环访问会静默死锁；改为 200ms 轮询 history，代价可忽略。
+
+        ``after_ts``：P0-7 修复——浏览器 EventSource 自动发 ``Last-Event-ID``
+        （来自上次收到的 ``id: <ts>``），传进来后从 ts 之后的事件开始推送。
+        客户端断线重连只补"漏掉的那部分"，而不是从 0 重放导致正文重复拼接。
         """
         handle = self._runs.get(run_id)
         if handle is None:
@@ -508,7 +537,18 @@ class AgentRuntime:
             yield AgentEvent(type="done", data={"run_id": run_id, "phase": "error"})
             return
 
-        delivered = 0
+        # P0-7：解析 after_ts，从该 ts 之后的事件开始
+        start_cursor = 0
+        if after_ts is not None:
+            try:
+                cutoff = float(after_ts)
+            except (TypeError, ValueError):
+                cutoff = 0.0
+            start_cursor = sum(
+                1 for ev in handle.history if ev.ts <= cutoff
+            )
+
+        delivered = start_cursor
         deadline = time.monotonic() + timeout
         last_output = time.monotonic()
 

@@ -164,8 +164,10 @@ class LLMClient(OllamaBackend, OpenAIBackend):
         否则重试耗时会被统计掩盖）。阶段与 run_id 从当前 trace 上下文推断。
 
         当调用方没建 trace（P0-4 缺陷的现场）时，从调用栈推断一个 phase 标签：
-        取最近一个 agent/ 下的方法名作为 phase、``_record`` 自身的调用者作为 trace_id 的 fallback。
-        这避免 observability 里两列长期为空。
+        **按文件路径找第一个"业务帧"**（在 medscholar/ 内且不在 llm/ 内），
+        取它的限定方法名作为 phase。不用固定层数——固定层数在深调用栈下会越界、
+        浅调用栈下又会停在后端内部（两种都实测遇到过）。
+        推断出的值带 ``inferred:`` 前缀，让下游一眼看出这不是真实 trace 上下文。
         """
         latency_ms = (time.monotonic() - started) * 1000
         if ok:
@@ -175,25 +177,30 @@ class LLMClient(OllamaBackend, OpenAIBackend):
         trace = current_trace()
         phase = span.name if span is not None else ""
         run_id = trace.trace_id if trace is not None else ""
-        # 调用栈推断（P0-4 兜底）
+        # 调用栈推断（P0-4 兜底）：只在缺 phase 或 run_id 时做，正常路径零开销。
         if not phase or not run_id:
             try:
-                import inspect as _inspect
-                frame = _inspect.currentframe()
-                # 跳过 _record 自身 + 客户端方法 + 后端方法
-                for _ in range(8):
+                import sys as _sys
+
+                frame = _sys._getframe(0).f_back
+                # 最多回溯 12 层（防御性上界），取第一个"业务帧"：
+                # 文件在 medscholar/ 包内，但不在 llm/ 子包内（排除客户端与后端自身）。
+                for _ in range(12):
                     if frame is None:
                         break
+                    filename = (frame.f_code.co_filename or "").replace("\\", "/")
+                    if "/medscholar/" in filename and "/medscholar/llm/" not in filename:
+                        break
                     frame = frame.f_back
-                inferred_phase = ""
                 if frame is not None:
-                    fn = frame.f_code.co_qualname or frame.f_code.co_name
-                    # WriterAgent.write_review -> "write_review"；agent.run -> "agent.run"
-                    inferred_phase = fn.split(".")[-1]
-                if inferred_phase and not phase:
-                    phase = inferred_phase
-                if frame is not None and not run_id:
-                    run_id = f"untraced:{frame.f_code.co_filename.split('medscholar')[-1]}:{frame.f_lineno}"
+                    qual = frame.f_code.co_qualname or frame.f_code.co_name
+                    short = qual.split(".")[-1]
+                    if short and not phase:
+                        phase = f"inferred:{short}"
+                    if not run_id:
+                        rel = (frame.f_code.co_filename or "").replace("\\", "/")
+                        tail = rel.split("/medscholar/", 1)[-1]
+                        run_id = f"untraced:{tail}:{frame.f_lineno}"
             except Exception:  # pragma: no cover - 栈推断失败绝不影响记账
                 pass
         LEDGER.record(
@@ -340,7 +347,38 @@ def get_llm(config: AppConfig | None = None) -> LLMClient:
     return _LLM
 
 
+# P1-3：按阶段路由。每个阶段可有不同 model；不同 model 走不同熔断器，天然隔离。
+# 未配置阶段则回落到默认 get_llm()。
+_STAGE_LLM_CACHE: dict[tuple[str, str, str], LLMClient] = {}
+
+
+def get_llm_for_stage(stage: str, config: AppConfig | None = None) -> LLMClient:
+    """P1-3：按 agent 阶段（plan/critique/section/...）取 LLM 客户端。
+
+    设计目标：让"规划/批判"这类想深的环节用更贵但更强的模型，
+    "正文写作"这类大量生成的环节用便宜模型。当前项目只配了
+    `cfg.llm.routing.{stage}`，如未配置则**回落到默认 get_llm**（保持向后兼容）。
+    """
+    cfg = config or get_config()
+    routing = getattr(cfg.llm, "routing", None) or {}
+    settings = routing.get(stage) if isinstance(routing, dict) else None
+    if settings is None:
+        return get_llm(cfg)
+    key = f"{settings.provider}:{settings.model}:{settings.base_url}"
+    client = _STAGE_LLM_CACHE.get(key)
+    if client is None:
+        client = LLMClient(settings, config=cfg)
+        _STAGE_LLM_CACHE[key] = client
+    return client
+
+
+def reset_stage_llm_cache() -> None:
+    """测试用：清空按阶段路由的 client 缓存。"""
+    _STAGE_LLM_CACHE.clear()
+
+
 def reset_llm() -> None:
     global _LLM, _CACHE_KEY
     _LLM = None
     _CACHE_KEY = ""
+    reset_stage_llm_cache()

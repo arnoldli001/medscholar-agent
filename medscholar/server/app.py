@@ -131,9 +131,20 @@ def create_app() -> FastAPI:
 
 
 def _mount_static(app: FastAPI) -> None:
-    """挂载 ``/static`` 并禁止浏览器缓存；首页与 favicon 路由在 ``routes/system.py``。"""
+    """挂载 ``/static`` 并按 mtime 版本号正确缓存；首页与 favicon 路由在 ``routes/system.py``。
+
+    P1-9 修复：原实现 ``server/deps.py`` 把 ``app.js``/``style.css`` 注成 ``?v=<mtime>``
+    但中间件又对 ``/static/*`` 强加 ``no-store, must-revalidate``，两者矛盾——
+    浏览器本来能命中缓存的强缓存被 no-store 强制每次都向服务器校验，
+    198KB JS + 62KB CSS 每次刷新全量重下。
+
+    正确做法：
+    - 带 ``?v=`` 的静态资源 → ``immutable, max-age=31536000``（一年强缓存）。
+      URL 含 mtime，文件修改时 URL 自动变，浏览器从旧 URL 转向新 URL = 缓存自然失效。
+    - 根路径 ``/`` → ``no-store``（render_index 每次渲染可能不同，确保拿最新 HTML）。
+    - 不带 ``?v=`` 的 /static 子资源（如 favicon） → 短 max-age 默认。
+    """
     if WEB_DIR.is_dir():
-        # 必须 no-store：本地工具静态缓存无收益，浏览器跑旧版 app.js 会表现为"修复不生效"
         app.mount(
             "/static",
             StaticFiles(directory=str(WEB_DIR)),
@@ -141,13 +152,21 @@ def _mount_static(app: FastAPI) -> None:
         )
 
     @app.middleware("http")
-    async def _no_store_for_assets(request: Request, call_next):  # noqa: ANN001
+    async def _cache_strategy_for_assets(request: Request, call_next):  # noqa: ANN001
         response = await call_next(request)
         path = request.url.path
-        if path == "/" or path.startswith("/static/"):
+        query = request.url.query
+        if path == "/" or path == "/index.html":
+            # HTML 入口必须每次拿最新（render_index 注入了 ?v=）
             response.headers["Cache-Control"] = "no-store, must-revalidate"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
+        elif path.startswith("/static/") and "v=" in query:
+            # 带版本号的静态资源：URL 含 mtime，强缓存一年
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif path.startswith("/static/"):
+            # 不带版本号的（如 favicon）：短缓存以减少重复请求，但不强制刷新
+            response.headers["Cache-Control"] = "public, max-age=3600"
         return response
 
 

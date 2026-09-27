@@ -132,7 +132,7 @@ SIZE_ALLOWLIST: dict[str, str] = {
     "medscholar.agent.graph": "ResearchGraph 的阶段逻辑待拆为 phases/*（见 REFACTORING 待办）",
     "medscholar.agent.runtime": "AgentRuntime 的运行生命周期待抽为 use case 服务",
     "medscholar.cli": "命令行子命令较多；已按子命令分段，进一步拆分收益低",
-    "medscholar.eval.faithfulness": "规则集与判定聚合同属一个内聚单元，拆开反而增加跳转成本",
+    "medscholar.domain.faithfulness": "规则集与判定聚合同属一个内聚单元，拆开反而增加跳转成本（原 eval.faithfulness，已下沉到 domain 以便生成链路合法调用）",
 }
 
 

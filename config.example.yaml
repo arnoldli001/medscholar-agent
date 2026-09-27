@@ -211,7 +211,7 @@ retrieval:
   fts_candidates: 100      # BM25 召回条数
   vector_candidates: 100   # 向量召回条数
   top_k: 20                # 融合后返回条数
-  min_score: 0.0
+  min_score_ratio: 0.0     # P2-5：相对阈值，0=关闭；RRF 绝对分恒不触发阈值
   # BM25 列权重：标题命中远比其他字段重要
   bm25_weights:
     title: 8.0

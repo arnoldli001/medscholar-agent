@@ -96,7 +96,9 @@ async def _embed_ids(
         texts: list[str] = []
         valid: list[int] = []
         for paper_id in chunk:
-            paper = get_paper(paper_id, db=db)
+            # P0-6：get_paper 走同步 SQLite，在 async 路径直接调用会冻结事件循环；
+            # batch_size=16 时一个批最多 16 次轻微查询，丢线程代价可控。
+            paper = await asyncio.to_thread(get_paper, paper_id, db=db)
             if paper is None:
                 report.skipped += 1
                 continue
@@ -126,7 +128,8 @@ async def _embed_ids(
             )
             continue
 
-        store_embeddings(list(zip(valid, vectors)), db=db)
+        # P0-6：store_embeddings 同步 SQLite；丢线程
+        await asyncio.to_thread(store_embeddings, list(zip(valid, vectors)), db=db)
         report.embedded += len(valid)
 
         if cfg.embedding.idle_seconds > 0:

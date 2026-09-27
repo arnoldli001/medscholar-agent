@@ -38,7 +38,8 @@ class PubMedClient(BaseClient):
     def __init__(self, settings=None, *, config=None, client=None) -> None:
         super().__init__(settings, config=config, client=client)
         if self.settings.api_key:
-            self.bucket.update_rps(max(self.settings.rps, 10.0))
+            # P1-12：改为 min(settings.rps, 上限)。原 max() 会把用户的保守设置向上覆盖。
+            self.bucket.update_rps(min(self.settings.rps, 10.0))
 
     # ------------------------------------------------------------- 公共参数
     def _common_params(self) -> dict[str, Any]:

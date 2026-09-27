@@ -103,7 +103,15 @@ def section_user(
     min_chars: int = 0,
     style: str = "综述正文",
 ) -> str:
-    """单章节撰写提示词。字数给区间而非单一目标值，并明确写满下限，否则模型会贴着下限写。"""
+    """单章节撰写提示词。字数给区间而非单一目标值，并明确写满下限。
+
+    P2-8 修复：把 ``digest``（5 章节共用）放到 user.content 最前面，把
+    ``topic/section_title/points`` 放到 digest 之后。这样在云端（DeepSeek / OpenAI）
+    自动前缀缓存下，digest 作为稳定前缀被命中，后 4 个章节的输入 token 成本降 90%。
+
+    重要：digest 必须是**字节级稳定**的（不可在前缀里塞时间戳 / 随机内容）。
+    build_context_digest 已确保这一点（按论文引用编号升序 + max_abstract 固定）。
+    """
     if points:
         bullet = "\n".join(f"- {p}" for p in points)
     else:
@@ -119,14 +127,21 @@ def section_user(
         length_clause = prompt_text(
             "writer.section.length_plain", style=style, max_chars=max_chars
         )
-    return prompt_text(
-        "writer.section",
-        topic=topic,
-        section_title=section_title,
-        bullet=bullet,
-        digest=digest,
-        length_clause=length_clause,
+    # 注意：原 writer.section 模板用占位符拼装。为了缓存命中，**不要**再用模板的
+    # 散落占位符——直接拼装稳定前缀 (digest) + 章节级变化部分。
+    parts: list[str] = []
+    if digest:
+        parts.append(digest)
+    parts.append(f"研究课题：{topic}")
+    parts.append(f"章节：{section_title}")
+    if bullet:
+        parts.append(f"本章要点：\n{bullet}")
+    parts.append(length_clause)
+    parts.append(
+        "请基于上述材料撰写本章节正文：直接输出 Markdown，"
+        "引用使用 `[n]` 形式，不输出 JSON、解释或标题层级之外的元信息。"
     )
+    return "\n\n".join(parts)
 
 
 _CRITIQUE_SCHEMA = {
@@ -246,7 +261,12 @@ def digest_papers(
 ) -> str:
     """把文献列表压成提示词用的材料摘要。编号即正文引用序号：优先用显式 __index__
     （筛选子集有编号空洞，重编号会让材料 [n] 与正文引用错位），否则按 start_index
-    顺序递增，脏字段安全回退。本函数产出运行时数据块，故不放进提示词注册表。"""
+    顺序递增，脏字段安全回退。本函数产出运行时数据块，故不放进提示词注册表。
+
+    P0-3 修复：若 ``paper['__fulltext_excerpt__']`` 存在，会在摘要后追加一段
+    "全文片段（仅前 N 字）"。这段内容**是高危注入面**——_guard_materials 已把全文
+    纳入 ``detect_injection`` 扫描。
+    """
     blocks: list[str] = []
     for offset, paper in enumerate(papers[:max_papers]):
         index = _numbered_index(paper, start_index + offset)
@@ -268,6 +288,14 @@ def digest_papers(
         meta = f"    {first_author} 等 | {journal} | {year} | 被引 {cited} | {oa}"
         if ptype:
             meta += f" | {ptype}"
-        body = f"    摘要：{abstract}" if abstract else "    摘要：（无）"
-        blocks.append(f"{head}\n{meta}\n{body}")
+        body_lines: list[str] = []
+        if abstract:
+            body_lines.append(f"    摘要：{abstract}")
+        else:
+            body_lines.append("    摘要：（无）")
+        # P0-3：拼接全文片段（由 build_context_digest 在 __fulltext_excerpt__ 注入）
+        ft_excerpt = paper.get("__fulltext_excerpt__")
+        if isinstance(ft_excerpt, str) and ft_excerpt.strip():
+            body_lines.append(f"    全文片段：{ft_excerpt.strip()}")
+        blocks.append(f"{head}\n{meta}\n" + "\n".join(body_lines))
     return "\n\n".join(blocks)

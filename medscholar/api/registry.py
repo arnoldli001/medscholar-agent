@@ -167,6 +167,14 @@ class SourceRegistry:
         self.config = config or get_config()
         self._clients: dict[str, BaseClient] = {}
         self._lock = asyncio.Lock()
+        # P1-11：每个数据源一个 Bulkhead（concurrency=1 即"该源同时只能一个请求"）。
+        # 防止某源被慢响应占满 asyncio 任务预算；批量限流且天然隔离。
+        # 这里的 limit=1 是合理默认（已有 TokenBucket 限速）；后续可按源配置。
+        self._bulkheads: dict[str, Any] = {}
+        from ..platform.resilience import Bulkhead
+
+        for name in ALL_SOURCES:
+            self._bulkheads[name] = Bulkhead(name=f"source:{name}", limit=1)
 
     # ------------------------------------------------------------ 客户端获取
     def _make_client(self, name: str) -> BaseClient:
@@ -254,21 +262,58 @@ class SourceRegistry:
                 duration_ms=int((time.perf_counter() - started) * 1000),
             )
 
-        per_source = per_source_limit or self.config.sources.get("pubmed").max_results
+        # P1-12：按每个源的 max_results 取，不再"pubmed 的值套所有源"。
+        async def per_source_for(name: str) -> int:
+            if per_source_limit is not None:
+                return int(per_source_limit)
+            cfg = self.config.sources.get(name)
+            return int(cfg.max_results) if cfg else 50
 
         async def run(name: str) -> tuple[str, list[Paper] | Exception, int]:
             t0 = time.perf_counter()
-            try:
-                client = await self.client(name)
-                if not client.enabled():
-                    return name, [], int((time.perf_counter() - t0) * 1000)
-                papers = await client.search(query, limit=per_source, filters=filters)
-                return name, papers, int((time.perf_counter() - t0) * 1000)
-            except Exception as exc:  # 单源失败必须被隔离
-                logger.info("数据源 %s 检索失败：%s", name, exc)
-                return name, exc, int((time.perf_counter() - t0) * 1000)
+            # P1-11：Bulkhead 包裹；同源并发请求只能 1 个，其他等位。
+            async with self._bulkheads[name]:
+                try:
+                    client = await self.client(name)
+                    if not client.enabled():
+                        return name, [], int((time.perf_counter() - t0) * 1000)
+                    papers = await client.search(
+                        query, limit=await per_source_for(name), filters=filters
+                    )
+                    return name, papers, int((time.perf_counter() - t0) * 1000)
+                except Exception as exc:  # 单源失败必须被隔离
+                    logger.info("数据源 %s 检索失败：%s", name, exc)
+                    return name, exc, int((time.perf_counter() - t0) * 1000)
 
-        results = await asyncio.gather(*(run(name) for name in names))
+        # P1-11：gather 加 wait_for；任一源超时不会让整轮等死。
+        # 总超时：取各源 timeout 的 2 倍 + 30s（留给串联重试）。
+        max_source_timeout = max(
+            (self.config.sources.get(n).timeout for n in names if self.config.sources.get(n)),
+            default=30.0,
+        )
+        timeout_total = max_source_timeout * 2 + 30.0
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*(run(name) for name in names)),
+                timeout=timeout_total,
+            )
+        except asyncio.TimeoutError:
+            # P1-11：超时上报为各源 SourceError（timeout 类别）
+            statuses = [
+                SourceStatus(
+                    name=name,
+                    label=SOURCE_LABELS.get(name, name),
+                    ok=False,
+                    error=f"整体超时（{timeout_total:.0f}s）",
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
+                for name in names
+            ]
+            return SearchOutcome(
+                query=query,
+                statuses=statuses,
+                duration_ms=int((time.perf_counter() - started) * 1000),
+            )
 
         statuses: list[SourceStatus] = []
         bucket: list[Paper] = []

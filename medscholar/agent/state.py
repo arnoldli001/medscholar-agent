@@ -395,6 +395,9 @@ class ReviewResult:
     issues: list[dict[str, Any]] = field(default_factory=list)
     strengths: list[str] = field(default_factory=list)
     invalid_citations: list[int] = field(default_factory=list)
+    #: P1-6：Tier 0 claim-level 忠实度报告（编号存在性 / 数字溯源 / 方向矛盾 / 过度主张）。
+    #: None 表示未跑（草稿为空或校验抛错）。前端据此渲染"引用支持性"面板。
+    faithfulness: dict[str, Any] | None = None
 
     @property
     def passed(self) -> bool:
@@ -409,6 +412,7 @@ class ReviewResult:
             "issues": list(self.issues),
             "strengths": list(self.strengths),
             "invalid_citations": list(self.invalid_citations),
+            "faithfulness": dict(self.faithfulness) if self.faithfulness else None,
         }
 
     @classmethod
@@ -420,6 +424,8 @@ class ReviewResult:
             score = float(data.get("score") or 0)
         except (TypeError, ValueError):
             score = 0.0
+        raw_faith = data.get("faithfulness")
+        faithfulness = dict(raw_faith) if isinstance(raw_faith, Mapping) else None
         return cls(
             verdict=str(data.get("verdict") or "pass").lower(),
             score=score,
@@ -428,6 +434,7 @@ class ReviewResult:
             invalid_citations=[
                 int(i) for i in (data.get("invalid_citations") or []) if str(i).lstrip("-").isdigit()
             ],
+            faithfulness=faithfulness,
         )
 
 

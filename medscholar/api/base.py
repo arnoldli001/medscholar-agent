@@ -222,9 +222,12 @@ class BaseClient(ABC):
 
             if response.status_code == 429:
                 retry_after = _parse_retry_after(response.headers.get("Retry-After"))
-                delay = max(retry_after, self._backoff(attempt))
+                # P1-11：给 Retry-After 加上限。恶意/异常的超大 Retry-After（小时级）
+                # 会让进程睡到不可用；按"该源的 2 倍 timeout"夹紧，超出即按 source error 上报。
+                cap = max(self.settings.timeout * 2, 30.0)
+                delay = max(min(retry_after, cap), self._backoff(attempt))
                 last_error = RateLimited(self.name, "触发速率限制（HTTP 429）", status=429)
-                logger.debug("%s 被限流，%.1fs 后重试", self.name, delay)
+                logger.debug("%s 被限流，%.1fs 后重试（Retry-After=%s）", self.name, delay, retry_after)
                 await asyncio.sleep(delay)
                 continue
 

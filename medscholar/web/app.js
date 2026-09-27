@@ -2878,6 +2878,11 @@ function startAgentRun(topicOverride) {
 /** 打开 SSE 事件流并注册全部事件类型。 */
 function openStream(runId) {
   closeStream();
+  // P0-7：如果是要"恢复"一个已有的 run（刷新页面后调用），
+  // 先重置前端派生状态，让 EventSource 从 Last-Event-ID 续播时不会把旧 token 拼回 buffer
+  if (state.run && state.run.id === runId && state.run.finished === false) {
+    resetRunViewForReplay();
+  }
   var url = apiUrl('/api/agent/stream/' + encodeURIComponent(runId));
   var es;
   try {
@@ -2938,6 +2943,26 @@ function closeStream() {
     try { state.stream.close(); } catch (e) { /* 忽略 */ }
     state.stream = null;
   }
+}
+
+/** P0-7 修复：断线重连 / 刷新后重连 SSE 前清空派生状态。
+ * 浏览器 EventSource 自动管理 Last-Event-ID + 自动重连，所以**断线期间漏掉的 token
+ * 不会重放**——但**重新订阅时如果后端忽略 lastEventId 从 0 重放**，正文会被拼接两遍。
+ * 后端已加 ``id: <ts>`` 与 ``?lastEventId=`` 支持；这里负责把前端 buffer 等置零，
+ * 让补播重建视图（而不是叠加）。
+ */
+function resetRunViewForReplay() {
+  if (!state.run) return;
+  state.run.buffer = '';
+  state.run.lastEventId = null;
+  state.run.renderPending = false;
+  // 思考气泡外的"已输出"占位清空：直接重置 DOM
+  var streamEl = state.run.streamEl;
+  if (streamEl) {
+    while (streamEl.firstChild) streamEl.removeChild(streamEl.firstChild);
+  }
+  // tools 面板里的"搜索结果/评估"等增量事件，重连后会从服务器**继续**追加；
+  // 这里只清空"进度相关的占位"，不去动文献列表（论文不会重复推送）。
 }
 
 /** 统一的事件分派：单个事件解析失败不会影响后续事件。 */
@@ -3534,7 +3559,11 @@ function onDone(data) {
   var usage = data.usage || {};
   var usageText = Object.keys(usage).map(function (k) { return k + '=' + usage[k]; }).join(' · ');
 
-  setPhase('done');
+  // P2-7：按 data.phase 分支——done 才有绿色"已完成"；error/cancelled 必须显式标红/标灰。
+  var finalPhase = String(data.phase || 'done');
+  var isFailure = finalPhase === 'error' || finalPhase === 'cancelled';
+
+  setPhase(finalPhase);
   setRunBusy(false);
   closeStream();
   if (state.run) state.run.finished = true;
@@ -3548,18 +3577,37 @@ function onDone(data) {
     var streamNode = state.run.streamEl;
     streamNode.classList.remove('msg-streaming');
     var role = streamNode.querySelector('.msg-role');
-    if (role) role.textContent = 'MedScholar · 撰写完成';
+    if (role) role.textContent = isFailure ? ('MedScholar · ' + finalPhase) : 'MedScholar · 撰写完成';
   }
 
-  var summary = '研究流程结束，总耗时 ' + fmtMs(elapsed) + '。';
+  var summary;
+  if (finalPhase === 'error') {
+    summary = '运行异常终止，总耗时 ' + fmtMs(elapsed) + '。请检查错误日志后重试。';
+  } else if (finalPhase === 'cancelled') {
+    summary = '运行已取消，总耗时 ' + fmtMs(elapsed) + '。';
+  } else {
+    summary = '研究流程结束，总耗时 ' + fmtMs(elapsed) + '。';
+  }
   if (state.papers.length) summary += ' 候选文献 ' + state.papers.length + ' 篇。';
   if (state.artifacts.length) summary += ' 生成产物 ' + state.artifacts.length + ' 份。';
   pushMessage('system', summary);
-  pushTool('done', '运行完成', summary + (usageText ? ' · ' + usageText : ''));
-  toast('研究流程已完成。', 'ok');
+  pushTool(isFailure ? finalPhase : 'done', isFailure ? ('运行' + (finalPhase === 'error' ? '失败' : '已取消')) : '运行完成', summary + (usageText ? ' · ' + usageText : ''));
+  // P2-7：toast 颜色与文案按最终 phase 区分
+  toast(
+    isFailure ? (finalPhase === 'error' ? '运行异常终止。' : '运行已取消。') : '研究流程已完成。',
+    isFailure ? (finalPhase === 'error' ? 'err' : 'warn') : 'ok'
+  );
 
   var chip = $('runStateChip');
-  if (chip) { chip.textContent = '已完成'; chip.className = 'chip chip-ok'; chip.hidden = false; }
+  if (chip) {
+    if (finalPhase === 'error') {
+      chip.textContent = '出错'; chip.className = 'chip chip-err'; chip.hidden = false;
+    } else if (finalPhase === 'cancelled') {
+      chip.textContent = '已取消'; chip.className = 'chip chip-warn'; chip.hidden = false;
+    } else {
+      chip.textContent = '已完成'; chip.className = 'chip chip-ok'; chip.hidden = false;
+    }
+  }
 
   refreshLibrary();
   refreshSessions();
@@ -4702,6 +4750,25 @@ function restoreLatestRun() {
       pushTool('phase', '已恢复上次的成果',
         '上次运行（' + String(run.run_id).slice(0, 8) + '）已完成「' + done + '」阶段，'
         + '其内容已从数据库恢复；已入库文献 ' + (run.papers || 0) + ' 篇。');
+    }
+    // P0-7：若上次运行仍在执行中（被用户刷新页面打断），自动重连 SSE
+    // 让进度继续推送。后端会从 Last-Event-ID 续播，前端 buffer 已被 resetRunViewForReplay 清空。
+    if (run.status === 'running' || run.status === 'awaiting_approval') {
+      // 标记这是"恢复模式"——openStream 看到 state.run.id 匹配就会清空 buffer
+      state.run = {
+        id: run.run_id,
+        sessionId: run.session_id || null,
+        phase: run.phase || '',
+        finished: false,
+        buffer: '',
+        thinkingEl: null,
+        startedAt: Date.now(),
+        streamEl: null,
+        renderPending: false
+      };
+      openStream(run.run_id);
+      pushTool('status', '已重连 SSE',
+        '上次运行（' + String(run.run_id).slice(0, 8) + '）还在执行，自动重连事件流。');
     }
     updateDraftEmptyHint();
   });

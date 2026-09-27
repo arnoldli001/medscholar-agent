@@ -16,7 +16,8 @@ from ..db.connect import Database, get_db
 from ..db.repo import insert_paper
 from ..dedupe import merge_papers
 from ..models import Paper, SearchLogEntry
-from ..db.repo import log_search
+# P2-10：scout 不再每条 (query, source) 调一次 log_search，改在 search_plan 出口
+# 用 log_searches 批量写一次事务。
 from .state import PlanQuery, ResearchPlan
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,8 @@ class ScoutAgent:
         """执行 Plan 中的全部检索式。"""
         queries = self._queries_to_run(plan, sources)
         result = ScoutResult()
+        # P2-10：累积待批量写的 log 条目，循环结束统一一次事务。
+        self._pending_log_entries: list = []
         if not queries:
             await emit_event(emit, "status", message="没有可执行的检索式")
             return result
@@ -158,15 +161,17 @@ class ScoutAgent:
                     "skipped": status.skipped,
                 }
                 result.stats.append(entry)
-                log_search(
+                # P2-10：把 log 推到全局 list，循环结束统一批量写入。
+                # 原代码每条 (query, source) 一次 BEGIN IMMEDIATE 事务，
+                # 4 检索式 × 6 源 = 24 次写事务，串行极慢且冻结事件循环。
+                self._pending_log_entries.append(
                     SearchLogEntry(
                         query=label,
                         source=status.name,
                         result_count=status.count,
                         duration_ms=status.duration_ms,
                         error=status.error or ("skipped" if status.skipped else ""),
-                    ),
-                    db=self.db,
+                    )
                 )
 
             await emit_event(
@@ -199,6 +204,14 @@ class ScoutAgent:
 
         result.papers = merged[: limit * 3]
         result.paper_ids = [p.paper_id or 0 for p in result.papers]
+
+        # P2-10：批量写 search_logs，一次 BEGIN IMMEDIATE 事务搞定所有条目
+        if self._pending_log_entries:
+            from ..db.repo import log_searches
+            await asyncio.to_thread(
+                log_searches, self._pending_log_entries, db=self.db,
+            )
+            self._pending_log_entries = []
         return result
 
     # ------------------------------------------------------------------ 内部

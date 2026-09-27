@@ -33,7 +33,11 @@ class TestDefaults:
         assert sources.arxiv.rps <= 0.34, "arXiv 要求间隔 ≥3 秒"
         assert sources.cnki.enabled is False, "CNKI 公开检索已不可用，默认关闭"
 
-    def test_pubmed_rate_raised_with_key(self):
+    def test_pubmed_rate_respects_user_rps_not_overridden(self):
+        """P1-12 回归：原代码用 ``max(settings.rps, 10.0)`` 会在配置 api_key 后
+        把用户的 rps 默默抬高到 10，违反"用户更保守配置应被尊重"的契约。
+        改为 ``min(settings.rps, 上限)``，桶的 rps 必须 ≤ 用户设置。
+        """
         from medscholar.api.pubmed_client import PubMedClient
 
         plain = PubMedClient()
@@ -41,7 +45,15 @@ class TestDefaults:
             AppConfig().sources.pubmed.model_copy(update={"api_key": "abc", "rps": 3.0})
         )
         assert plain.bucket.rps == 3.0
-        assert with_key.bucket.rps == 10.0
+        # 配 api_key 后桶 rps 仍为 3.0，不再被静默调到 10.0
+        assert with_key.bucket.rps == 3.0, (
+            f"P1-12 回归：配 api_key 后 rps 不应被覆盖；实测 {with_key.bucket.rps}"
+        )
+        # 上限是兜底，用户配很大值时夹紧到 10
+        huge_key = PubMedClient(
+            AppConfig().sources.pubmed.model_copy(update={"api_key": "abc", "rps": 50.0})
+        )
+        assert huge_key.bucket.rps == 10.0
 
     def test_cnki_disabled_by_default(self):
         assert AppConfig().sources.get("cnki").enabled is False

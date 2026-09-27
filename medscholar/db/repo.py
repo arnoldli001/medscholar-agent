@@ -91,6 +91,8 @@ from .repositories.search import (
     _apply_vector_filters as _apply_vector_filters,
     hybrid_search as hybrid_search,
     log_search as log_search,
+    log_searches as log_searches,
+    purge_old_search_logs as purge_old_search_logs,
     recent_searches as recent_searches,
     rrf_fuse as rrf_fuse,
     search_fts as search_fts,

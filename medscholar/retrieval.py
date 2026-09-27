@@ -37,7 +37,12 @@ async def search_knowledge_base(
     db: Database | None = None,
     config: AppConfig | None = None,
 ) -> list[ScoredPaper]:
-    """混合检索本地知识库。"""
+    """混合检索本地知识库。
+
+    P0-6 修复：本地检索走同步 SQLite + vec 回退（O(N·d) 反序列化），
+    在 async 路径直接调用会冻结事件循环。本函数包一层 ``asyncio.to_thread``
+    把同步块丢进默认 executor，SSE 心跳 / 审批响应 / 健康检查才能并行。
+    """
     cfg = config or get_config()
     database = db or get_db()
     top_k = top_k or cfg.retrieval.top_k
@@ -46,8 +51,14 @@ async def search_knowledge_base(
     if use_vector and not cfg.offline:
         vector = await embed_query(query, config=cfg)
 
-    return hybrid_search(
-        query, embedding=vector, top_k=top_k, filters=filters, db=database
+    # P0-6：把同步 hybrid_search 丢进线程，避免冻结事件循环
+    return await asyncio.to_thread(
+        hybrid_search,
+        query,
+        embedding=vector,
+        top_k=top_k,
+        filters=filters,
+        db=database,
     )
 
 
@@ -118,6 +129,8 @@ def build_context_digest(
     *,
     max_abstract: int = 900,
     guard: bool = True,
+    fulltext_by_id: Mapping[int, str] | None = None,
+    fulltext_chars: int = 4000,
 ) -> str:
     """按显式编号构建材料块（编号与正文引用严格对应）。
 
@@ -131,6 +144,12 @@ def build_context_digest(
        （谁何时往语料塞了指令，要能查）。
 
     ``guard=False`` 只留给离线评测/单测（它们要断言材料原文）。
+
+    ``fulltext_by_id`` 与 ``fulltext_chars`` 是 P0-3 修复引入的全文通道：传入
+    ``{paper_id: fulltext_str}`` 后，每篇文献在摘要后追加最多 ``fulltext_chars`` 字
+    的全文片段。**全文是更危险的注入面**（摘要被编辑过，全文是出版商原始内容，
+    任何人在已抓到的 PDF 上加一段隐写指令就能污染后续综述），所以 ``_guard_materials``
+    必须把全文一并纳入 ``detect_injection`` 扫描。
     """
     from .llm.prompts import digest_papers
 
@@ -139,19 +158,39 @@ def build_context_digest(
     ordered = sorted(entries, key=lambda pair: pair[0])
     base = ordered[0][0]
     payload: list[dict[str, Any]] = []
+    fulltexts: dict[int, str] = {}
     for index, item in ordered:
         paper = item.paper if isinstance(item, ScoredPaper) else item
         data = paper.to_dict()
         data["__index__"] = index
+        if fulltext_by_id and paper.paper_id is not None:
+            ft = fulltext_by_id.get(paper.paper_id)
+            if ft:
+                snippet = ft[:fulltext_chars].rstrip()
+                if snippet:
+                    fulltexts[index] = snippet
+                    data["__fulltext_excerpt__"] = snippet
         payload.append(data)
     digest = digest_papers(payload, start_index=base, max_abstract=max_abstract)
     if not guard or not digest.strip():
         return digest
-    return _guard_materials(digest, entries=ordered)
+    return _guard_materials(digest, entries=ordered, fulltexts=fulltexts)
 
 
-def _guard_materials(digest: str, *, entries: Sequence[tuple[int, Any]]) -> str:
-    """把材料块包成不可信数据，并做注入扫描 + 审计计数。"""
+def _guard_materials(
+    digest: str,
+    *,
+    entries: Sequence[tuple[int, Any]],
+    fulltexts: Mapping[int, str] | None = None,
+) -> str:
+    """把材料块包成不可信数据，并做注入扫描 + 审计计数。
+
+    P0-3 修复：全文与摘要**同样**纳入 ``detect_injection``。摘要经过数据源
+    结构化（多数字段被引用方编辑过），而全文是出版商原始内容——任何人在
+    已抓到的 PDF 上加一段隐写指令（零宽字符 / 工具调用模板 / 角色伪标记）就能
+    污染后续综述。**摘要在 prompt 注入面前是低危面，全文是高危面**，护栏必须
+    覆盖两边。
+    """
     from .platform.security import (
         Finding,
         build_untrusted_context,
@@ -163,7 +202,11 @@ def _guard_materials(digest: str, *, entries: Sequence[tuple[int, Any]]) -> str:
     findings: list[Finding] = []
     for index, item in entries:
         paper = item.paper if isinstance(item, ScoredPaper) else item
+        # 摘要 + 标题（摘要被数据源结构化，相对干净）
         text = f"{paper.title or ''}\n{paper.abstract or ''}"
+        # 全文（来自 PDF / JATS 解析，**最高危**：原始发布内容，可能含伪指令）
+        if fulltexts and index in fulltexts:
+            text = f"{text}\n{fulltexts[index]}"
         for finding in detect_injection(text):
             findings.append(finding)
             logger.warning(

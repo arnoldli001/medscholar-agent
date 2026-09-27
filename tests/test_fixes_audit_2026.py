@@ -14,8 +14,7 @@ import pytest
 from medscholar.domain.query import for_source, parse_query
 from medscholar.domain.citation.styles import format_reference_list
 from medscholar.llm.client import LLMClient
-from medscholar.llm.errors import LLMError
-from medscholar.platform.observability import LEDGER, LLMUsage
+from medscholar.platform.observability import LEDGER
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +275,29 @@ def test_ledger_records_carry_explicit_phase_from_trace():
     items = LEDGER.recent(1)
     assert items[0].phase == "plan"
     assert items[0].run_id == tr.trace_id
+
+
+def test_graph_has_phase_spans_wired():
+    """P0-4 回归：只 create_trace 还不够——每个阶段必须有 trace.span，
+    否则账本 phase 只能靠栈推断（inferred:xxx），拿不到真实阶段名。
+
+    实现方式：``@_traced_phase("<name>")`` 装饰器（1 行改动、零缩进风险，
+    避免"给整个方法体加一级缩进"那类 SyntaxError）。
+    """
+    import re
+    from pathlib import Path as _Path
+
+    src = (
+        _Path(__file__).resolve().parent.parent / "medscholar" / "agent" / "graph.py"
+    ).read_text(encoding="utf-8")
+    assert "trace.span(" in src, "graph 必须有 trace.span 调用"
+    decorated = set(re.findall(r'@_traced_phase\("(\w+)"\)', src))
+    expected = {"plan", "execute", "reflect", "synthesize", "review", "finalize"}
+    missing = expected - decorated
+    assert not missing, (
+        f"这些阶段缺 @_traced_phase 装饰器：{sorted(missing)}——"
+        f"账本拿不到真实 phase，只能落到 inferred:xxx"
+    )
 
 
 # ---------------------------------------------------------------------------

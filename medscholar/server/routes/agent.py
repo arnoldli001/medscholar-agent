@@ -64,14 +64,27 @@ async def agent_run(req: AgentRunRequest) -> dict[str, Any]:
 
 
 @router.get("/api/agent/stream/{run_id}", tags=["Agent"])
-async def agent_stream(run_id: str, request: Request) -> StreamingResponse:
+async def agent_stream(
+    run_id: str,
+    request: Request,
+    last_event_id: str | None = Query(default=None, alias="lastEventId"),
+) -> StreamingResponse:
     async def generator() -> AsyncIterator[bytes]:
         try:
-            async for event in get_runtime().stream(run_id):
+            # P0-7：客户端断线重连时支持 ?lastEventId=<ts>，从该事件之后继续
+            # 推送（而不是从 0 重放，前端不幂等会重复拼接正文）。
+            # 浏览器 EventSource 自动发 Last-Event-ID header；这里走查询参数
+            # 形式更稳（部分代理不转发 EventSource header）。
+            async for event in get_runtime().stream(run_id, after_ts=last_event_id):
                 if await request.is_disconnected():
                     break
                 payload = json.dumps(event.data, ensure_ascii=False, default=str)
-                yield f"event: {event.type}\ndata: {payload}\n\n".encode("utf-8")
+                # 每条事件带 id（用 AgentEvent.ts），让浏览器能记 Last-Event-ID。
+                yield (
+                    f"id: {event.ts:.6f}\n"
+                    f"event: {event.type}\n"
+                    f"data: {payload}\n\n"
+                ).encode("utf-8")
         except asyncio.CancelledError:  # 客户端断开
             raise
         except Exception as exc:  # pragma: no cover

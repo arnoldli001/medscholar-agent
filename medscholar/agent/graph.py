@@ -12,7 +12,7 @@ from typing import Any, Awaitable, Callable, Sequence
 
 from ..cite import detect_style
 from ..config import AppConfig, get_config
-from ..platform.observability import TraceRecorder, create_trace
+from ..platform.observability import create_trace, current_trace
 from ..constants import (
     DIGEST_MAX_ABSTRACT_REVIEW,
     DIGEST_MAX_ABSTRACT_REVISE,
@@ -58,6 +58,31 @@ __all__ = ["ResearchGraph", "ApprovalCallback"]
 ApprovalCallback = Callable[[], Awaitable[tuple[str, str]]]
 
 
+def _traced_phase(name: str) -> Callable[[Any], Any]:
+    """给节点方法套一层 trace span（P0-4）。
+
+    用装饰器而不是在每个方法体里写 ``with trace.span(...):``——后者要给整个方法体
+    再加一级缩进，几十行的缩进改动一旦漏一行就是 ``SyntaxError``（实测踩过：
+    pytest 收集阶段直接崩，1384 个测试全部无法运行）。装饰器是 1 行改动、零缩进风险。
+
+    无 trace 时（CLI / 脚本 / 测试直接调节点方法）零开销直通，不改变任何行为。
+    """
+    import functools
+
+    def decorator(fn: Any) -> Any:
+        @functools.wraps(fn)
+        async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+            trace = current_trace()
+            if trace is None:
+                return await fn(self, *args, **kwargs)
+            with trace.span(name):
+                return await fn(self, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 class ResearchGraph:
     """把六个 Agent 串成一条可观测、可中断的流水线。"""
 
@@ -73,7 +98,7 @@ class ResearchGraph:
         self.scout = ScoutAgent(config=self.config, registry=registry, db=self.db)
         self.reader = ReaderAgent(config=self.config, db=self.db, registry=registry)
         self.critic = CriticAgent(config=self.config)
-        self.writer = WriterAgent(config=self.config)
+        self.writer = WriterAgent(config=self.config, db=self.db)
         self.formatter = FormatterAgent(config=self.config)
 
     async def close(self) -> None:
@@ -269,6 +294,7 @@ class ResearchGraph:
             snapshot["errors"] = list(state.errors[:MAX_ERRORS_SNAPSHOT])
         await emit_event(emit, "step", phase=phase, snapshot=snapshot)
 
+    @_traced_phase("plan")
     async def plan(
         self, state: AgentState, *, emit: Emitter | None = None, feedback: str = ""
     ) -> ResearchPlan:
@@ -334,6 +360,7 @@ class ResearchGraph:
         fallback.degraded_reason = degraded_reason
         return fallback
 
+    @_traced_phase("execute")
     async def execute(self, state: AgentState, *, emit: Emitter | None = None) -> None:
         """Execute 节点：Scout 并发检索 + 入库 + Reader 预取全文。"""
         plan = state.plan or _offline_plan(state.topic)
@@ -373,6 +400,7 @@ class ResearchGraph:
             if fetched:
                 await emit_event(emit, "status", message=f"已预取 {fetched} 篇开放获取全文")
 
+    @_traced_phase("reflect")
     async def reflect(self, state: AgentState, *, emit: Emitter | None = None) -> CritiqueResult:
         """Reflect 节点：Critic 评估证据质量，并据结果重排引用编号。"""
         entries = sorted(state.citation_map.items())
@@ -407,6 +435,7 @@ class ResearchGraph:
                     assessment.index = by_paper[assessment.paper_id]
         return result
 
+    @_traced_phase("synthesize")
     async def synthesize(self, state: AgentState, *, emit: Emitter | None = None) -> str:
         """Synthesize 节点：Writer 流式撰写，Formatter 统一引用格式。"""
         entries = sorted(state.citation_map.items())
@@ -438,8 +467,16 @@ class ResearchGraph:
         state.draft = draft
         return draft
 
+    @_traced_phase("review")
     async def review(self, state: AgentState, *, emit: Emitter | None = None) -> ReviewResult:
-        """Review 节点：规则体检 + LLM 自我批判，必要时做一轮自动修订。"""
+        """Review 节点：规则体检 + claim-level 忠实度 + LLM 自我批判，必要时自动修订。
+
+        P1-6：Tier 0 claim-level 校验（编号存在性 / 数字溯源 / 方向矛盾 / 过度主张 /
+        有据性）接进生产链路。这组规则原先只活在 ``scripts/eval_faithfulness.py``，
+        架构上属于 eval 层、生成链路无法合法调用（「运行时不得依赖 eval」）；
+        现已下沉到 :mod:`medscholar.domain.faithfulness`，这里才接得上。
+        纯函数、零 IO、离线可跑——所以在 offline 模式下也执行。
+        """
         entries = sorted(state.citation_map.items())
         result = ReviewResult()
 
@@ -448,6 +485,18 @@ class ResearchGraph:
         result.invalid_citations = list(check["citations"]["missing_from_list"])
         result.issues = list(check["issues"])
         result.verdict = check["verdict"]
+
+        # P1-6：claim-level 忠实度（Tier 0，确定性、离线可用）
+        faithfulness = await self._tier0_faithfulness(state, entries)
+        if faithfulness is not None:
+            result.faithfulness = faithfulness
+            for issue in faithfulness.get("issues", []):
+                result.issues.append(issue)
+            if faithfulness.get("verdict") == "revise":
+                # 高危项（方向矛盾 / 编造数字）必须让整体 verdict 变成 revise，
+                # 否则会走进 auto_revise 判断之外的"看起来通过"分支
+                result.verdict = "revise"
+            await emit_event(emit, "faithfulness", **faithfulness)
 
         if not state.offline and not self.config.offline and state.draft.strip():
             try:
@@ -489,6 +538,75 @@ class ResearchGraph:
 
         return result
 
+    async def _tier0_faithfulness(
+        self, state: AgentState, entries: Sequence[tuple[int, Paper]]
+    ) -> dict[str, Any] | None:
+        """P1-6：跑 Tier 0 claim-level 校验，把高危项转成 review issue。
+
+        纯函数、零 IO（正则 + 集合运算），但长文（4 万字 / 上百条 claim）仍可能
+        占用毫秒级 CPU，所以丢到线程里跑，避免与 SSE 心跳争事件循环。
+        """
+        if not state.draft.strip():
+            return None
+        from ..domain.faithfulness import analyse_draft
+
+        # 材料来源：摘要优先，有全文就用全文（全文更能核对数字与方向）
+        fulltexts = self._load_fulltext_for_review(entries)
+        sources: dict[int, str] = {}
+        for index, paper in entries:
+            parts = [paper.title or "", paper.abstract or ""]
+            pid = paper.paper_id
+            if pid and fulltexts.get(pid):
+                parts.append(fulltexts[pid])
+            sources[index] = "\n".join(p for p in parts if p)
+
+        try:
+            report = await asyncio.to_thread(
+                analyse_draft,
+                state.draft,
+                sources,
+                valid_ids=[index for index, _ in entries],
+            )
+        except Exception as exc:  # pragma: no cover - 校验失败不应阻断成稿
+            logger.warning("Tier 0 忠实度校验失败：%s", exc, exc_info=True)
+            return None
+
+        payload = report.to_dict()
+        by_verdict = payload.get("by_verdict") or {}
+        # 只把"有实质问题"的判定转成 issue；weakly_supported / unverifiable 是
+        # "证据不足"而非"有问题"，塞进 issues 会稀释真正的高危项。
+        problem_verdicts = {"contradicted", "overclaim", "unsupported"}
+        details = [
+            d for d in (payload.get("details") or [])
+            if d.get("verdict") in problem_verdicts
+        ]
+        issues: list[dict[str, Any]] = []
+        for detail in details[:6]:  # 上限：避免把 review 面板刷爆
+            problems = detail.get("problems") or []
+            rules = sorted({str(p.get("rule")) for p in problems if p.get("rule")})
+            severity = "high" if detail.get("verdict") in {"contradicted", "unsupported"} else "medium"
+            issues.append({
+                "severity": severity,
+                "type": "引用支持性",
+                "detail": (
+                    f"第 {detail.get('index', '?')} 条带引用论断被判为 {detail.get('verdict')}"
+                    f"（规则：{'/'.join(rules) or '未标注'}）"
+                ),
+                "suggestion": (problems[0].get("suggestion") if problems else "") or "人工复核该论断与所引文献",
+            })
+
+        payload["issues"] = issues
+        high = sum(1 for i in issues if i["severity"] == "high")
+        payload["verdict"] = "revise" if high else "pass"
+        payload["summary"] = (
+            f"claim-level 校验：{payload.get('claims', 0)} 条论断，"
+            + "、".join(f"{k}={v}" for k, v in sorted(by_verdict.items()))
+            if by_verdict
+            else f"claim-level 校验：{payload.get('claims', 0)} 条论断，未发现高危项"
+        )
+        return payload
+
+    @_traced_phase("finalize")
     async def finalize(self, state: AgentState, *, emit: Emitter | None = None) -> None:
         """成稿：生成参考文献表并保存产物。"""
         entries = sorted(state.citation_map.items())
@@ -561,7 +679,14 @@ class ResearchGraph:
     ) -> ReviewResult | None:
         client = get_llm(self.config)
         await client.start()
-        digest = build_context_digest(entries, max_abstract=DIGEST_MAX_ABSTRACT_REVIEW)
+        # P0-3：review 阶段也接上全文通道（用更短片段，避免与草稿叠加超预算）
+        fulltext_by_id = self._load_fulltext_for_review(entries)
+        digest = build_context_digest(
+            entries,
+            max_abstract=DIGEST_MAX_ABSTRACT_REVIEW,
+            fulltext_by_id=fulltext_by_id,
+            fulltext_chars=800,
+        )
         payload = await client.chat_json(
             [
                 {
@@ -597,6 +722,25 @@ class ResearchGraph:
             issues=issues,
             strengths=[str(s) for s in (payload.get("strengths") or []) if s],
         )
+
+    def _load_fulltext_for_review(
+        self, entries: Sequence[tuple[int, Paper]]
+    ) -> dict[int, str]:
+        """P0-3：review 阶段拉全文。复用 WriterAgent 同款逻辑（短片段）。"""
+        ids = [p.paper_id for _idx, p in entries if p.paper_id]
+        if not ids:
+            return {}
+        from ..db.repo import get_fulltext
+
+        out: dict[int, str] = {}
+        for pid in ids:
+            try:
+                text = get_fulltext(pid, db=self.db)
+            except Exception:
+                continue
+            if text and text.strip():
+                out[pid] = text
+        return out
 
     async def _auto_revise(
         self, state: AgentState, review: ReviewResult, *, emit: Emitter | None
@@ -644,6 +788,16 @@ class ResearchGraph:
             state.review.verdict = check["verdict"]
             state.review.issues = list(check["issues"])
             state.review.invalid_citations = list(check["citations"]["missing_from_list"])
+            # 草稿变了，Tier 0 报告必须重跑——否则面板上的"引用支持性"说的是旧草稿，
+            # 属于"报告与产物不一致"。修订后仍报高危项则保持 revise。
+            refreshed = await self._tier0_faithfulness(state, entries)
+            if refreshed is not None:
+                state.review.faithfulness = refreshed
+                for issue in refreshed.get("issues", []):
+                    state.review.issues.append(issue)
+                if refreshed.get("verdict") == "revise":
+                    state.review.verdict = "revise"
+                await emit_event(emit, "faithfulness", **refreshed)
         await emit_event(emit, "status", message="自动修订完成，已更新草稿")
 
 

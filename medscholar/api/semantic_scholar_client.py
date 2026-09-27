@@ -36,8 +36,10 @@ class SemanticScholarClient(BaseClient):
     def __init__(self, settings=None, *, config=None, client=None) -> None:
         super().__init__(settings, config=config, client=client)
         if self.settings.api_key:
-            self.bucket.update_rps(max(self.settings.rps, 3.0))
+            # P1-12：max → min。同 pubmed_client。
+            self.bucket.update_rps(min(self.settings.rps, 3.0))
         self._consecutive_429 = 0
+        self._consecutive_ok = 0  # P1-12：连续成功计数，用于限速恢复
 
     def _headers(self) -> dict[str, str]:
         return {"x-api-key": self.settings.api_key} if self.settings.api_key else {}
@@ -50,9 +52,21 @@ class SemanticScholarClient(BaseClient):
                 method, url, params=params, headers=merged, expect=expect
             )
             self._consecutive_429 = 0
+            self._consecutive_ok += 1
+            if self._consecutive_ok >= 10:
+                configured = float(self.settings.rps or 0.3)
+                target = min(configured, self.bucket.rps * 1.5)
+                if target > self.bucket.rps:
+                    self.bucket.update_rps(target)
+                    self._consecutive_ok = 0
+                    logger.info(
+                        "Semantic Scholar 连续成功，限速恢复至 %.2f 次/秒",
+                        target,
+                    )
             return result
         except RateLimited:
             self._consecutive_429 += 1
+            self._consecutive_ok = 0
             new_rps = max(_MIN_RPS, self.bucket.rps / 2)
             if new_rps < self.bucket.rps:
                 logger.warning(

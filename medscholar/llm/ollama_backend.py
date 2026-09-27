@@ -185,6 +185,25 @@ class OllamaBackend:
                     )
                     self._log_timing(chunk)
                     break
+        except GeneratorExit:  # 调用方提前退出（客户端断开 / 上层 cancel）
+            # P1-5：流式失败/中断时也必须记账；token 数不可知，记 0 但落账 latency 与 error_kind
+            self._record(
+                prompt_tokens=0,
+                completion_tokens=0,
+                started=started,
+                ok=False,
+                error_kind="cancelled",
+            )
+            raise
+        except Exception as exc:
+            self._record(
+                prompt_tokens=0,
+                completion_tokens=0,
+                started=started,
+                ok=False,
+                error_kind=failure_kind(exc),
+            )
+            raise
         finally:
             await response.aclose()
     def _ollama_options(self, temperature: float | None, max_tokens: int | None) -> dict[str, Any]:

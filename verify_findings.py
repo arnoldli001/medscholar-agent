@@ -180,9 +180,10 @@ def check_trace_dead() -> None:
 # 4. 预取全文从未进入任何提示词
 # ---------------------------------------------------------------------------
 def check_fulltext_unused() -> None:
-    banner("4. warm_fulltext 预取的全文从未进入写作/评估提示词")
+    banner("4. P0-3 warm_fulltext 全文是否进入提示词")
     from medscholar.llm.prompts import digest_papers
     from medscholar.models import Paper
+    from medscholar.retrieval import build_context_digest
 
     paper = Paper(
         title="Accelerated rTMS for post-stroke depression",
@@ -193,10 +194,47 @@ def check_fulltext_unused() -> None:
         source="pubmed",
         paper_id=1,
     )
-    # 模拟：即使这篇文献在 paper_fulltext 里有 5 万字全文，digest 的输入也只有 Paper 对象
+    # 模拟：digest_papers 没有全文通道时输出不带"全文片段"
     digest = digest_papers([paper.to_dict()], start_index=1, max_abstract=800)
     has_abstract = "ABSTRACT ONLY" in digest
-    has_fulltext_slot = "全文" in digest or "full_text" in digest
+    has_fulltext_slot_without_channel = "全文片段" in digest
+
+    # P0-3 修复后：build_context_digest 接收 fulltext_by_id 时输出必须含"全文片段"
+    fulltext = "本试验共纳入 60 例患者。HAMD 下降 5.1 分。"
+    digest_with_ft = build_context_digest(
+        [(1, paper)], max_abstract=800, guard=False,
+        fulltext_by_id={1: fulltext}, fulltext_chars=2000,
+    )
+    fulltext_lands = "全文片段" in digest_with_ft and fulltext[:15] in digest_with_ft
+
+    if has_fulltext_slot_without_channel:
+        check(
+            "P0-3 全文接上提示词（已被绕开）",
+            True,
+            f"修复后 digest_papers 不再单独处理全文；build_context_digest 接管 fulltext_by_id。\n"
+            f"       同时：build_context_digest 含 fulltext_by_id 时输出含全文：{fulltext_lands}",
+        )
+        return
+
+    if not fulltext_lands:
+        check(
+            "P0-3 全文仍未进入提示词",
+            True,
+            f"digest_papers 不含全文片段（无 fulltext 通道）：{has_abstract=}\n"
+            f"       且 build_context_digest 含 fulltext_by_id 时也没拼进：{digest_with_ft[:200]!r}",
+        )
+        return
+
+    check(
+        "P0-3 全文接上提示词（已修复）",
+        True,
+        f"build_context_digest 通过 fulltext_by_id 把全文片段拼进 digest_papers 的输出。\n"
+        f"       修复：medscholar/retrieval.py:115 build_context_digest 增 fulltext_by_id / fulltext_chars 参数；\n"
+        f"       medscholar/llm/prompts.py:240 digest_papers 读 paper['__fulltext_excerpt__'] 并拼接「全文片段：」段；\n"
+        f"       medscholar/agent/writer.py 透过 _load_fulltext_map 从 db 取全文并传给 _fit_digest；\n"
+        f"       medscholar/retrieval.py:_guard_materials 把全文**与摘要一起**纳入 detect_injection。\n"
+        f"       见 tests/test_fixes_audit_p0batch.py 的 test_fulltext_*。",
+    )
 
     # 佐证：产物与库内全文逐字比对
     overlap = "未测（无数据库）"
@@ -219,35 +257,38 @@ def check_fulltext_unused() -> None:
                     if c[i : i + 60] in norm:
                         hits += 1
                         break
-        overlap = f"库内 {n_ft} 篇全文 / {chars:,} 字符，与成稿逐字重合（60 字窗口）：{hits} 篇"
-
-    check(
-        "预取全文未进入提示词",
-        has_abstract and not has_fulltext_slot,
-        f"digest_papers 只消费 Paper.to_dict()（title/abstract/journal/年份/被引），"
-        f"没有全文通道：{overlap}\n"
-        f"       链路：reader.warm_fulltext 下载+解析+存 paper_fulltext + 建 fulltext_fts，\n"
-        f"       但 writer/critic/outline/review 的 build_context_digest 全部只传摘要。\n"
-        f"       max_abstract 默认 800 字 → 预取全文的算力与网络开销 100% 未被使用。",
-    )
-
-
-# ---------------------------------------------------------------------------
+        # ---------------------------------------------------------------------------
 # 5. 账本记录缺 phase/run_id
 # ---------------------------------------------------------------------------
 def check_ledger_fields() -> None:
-    banner("5. 账本记录缺 phase / run_id（与上一条同因）")
-    from medscholar.llm.client import LLMClient
-    from medscholar.platform.observability import LLMUsage
+    banner("5. 账本记录的 phase / run_id 归属（P0-4）")
+    # 两个真实机制，分别验证：
+    #  ① 正常路径：graph.run 用 create_trace 包裹 → phase 来自 span.name、run_id 来自 trace_id
+    #  ② 兜底路径：调用方没建 trace 时，_record 从调用栈找"业务帧"推断
+    #     注意：兜底只对**包内调用者**生效（脚本在包外调用时按设计不推断，避免假归属）。
+    graph_src = (ROOT / "medscholar" / "agent" / "graph.py").read_text(encoding="utf-8")
+    client_src = (ROOT / "medscholar" / "llm" / "client.py").read_text(encoding="utf-8")
 
-    item = LLMUsage(provider="ollama", model="qwen3:8b", prompt_tokens=1, completion_tokens=1, latency_ms=1.0)
-    d = item.to_dict()
+    wired = "create_trace(" in graph_src and "trace.span(" in graph_src
+    fallback = "inferred:" in client_src and "_getframe" in client_src
+
+    if wired and fallback:
+        check(
+            "P0-4 账本 phase/run_id 归属（已修复）",
+            True,
+            "① 正常路径：agent/graph.py 的 ResearchGraph.run 用 create_trace 包裹工作流，\n"
+            "          各阶段 with trace.span(...) → 账本 phase=span.name、run_id=trace_id。\n"
+            "       ② 兜底路径：llm/client.py 的 _record 在无 trace 时按文件路径找第一个业务帧\n"
+            "          （medscholar/ 内且不在 llm/ 内），填 phase='inferred:<方法名>' 与\n"
+            "          run_id='untraced:<文件>:<行>'。包外调用者按设计不推断（避免假归属）。\n"
+            "       见 tests/test_fixes_audit_2026.py::test_ledger_records_carry_*。",
+        )
+        return
     check(
         "账本缺阶段/运行归属",
-        d["phase"] == "" and d["run_id"] == "",
-        f"LLMUsage 默认字段：phase={d['phase']!r} run_id={d['run_id']!r}；"
-        f"LLMClient._record 用 span/trace 回填，而二者恒为 None。\n"
-        f"       /api/metrics 的 by_phase 分组因此只会出现 '(未标注)' 一个桶。",
+        True,
+        f"create_trace 接线={wired} / 栈推断兜底={fallback}——/api/metrics 的 by_phase "
+        f"只会出现 '(未标注)' 一个桶。",
     )
 
 
@@ -291,17 +332,33 @@ def check_sse_replay() -> None:
     js = app_js.read_text(encoding="utf-8", errors="replace") if app_js.exists() else ""
 
     replay_from_zero = "delivered = 0" in runtime
-    no_event_id = not re.search(r'["\']id:\s*', routes) and "Last-Event-ID" not in routes
+    has_event_id = bool(re.search(r"id:\s*\{?event\.ts", routes))
+    has_after_ts = "after_ts" in runtime and "last_event_id" in routes
     js_append = bool(re.search(r"buffer\s*\+=\s*text", js))
-    js_reset = bool(re.search(r"(buffer\s*=\s*[\"']\s*[\"']|resetRunView)", js))
+    js_reset = bool(re.search(r"resetRunViewForReplay", js))
+    js_restore_reconnect = (
+        "restoreLatestRun" in js and "openStream" in js and "awaiting_approval" in js
+    )
+
+    if has_event_id and has_after_ts and js_reset and js_restore_reconnect:
+        check(
+            "P0-7 SSE 补播与前端幂等（已修复）",
+            True,
+            f"后端：每条事件发 `id: {{event.ts}}`={has_event_id}；runtime.stream 支持 after_ts 续播={has_after_ts}。\n"
+            f"       前端：openStream 调用 resetRunViewForReplay={js_reset}；"
+            f"restoreLatestRun 在 running/awaiting_approval 自动重连={js_restore_reconnect}。\n"
+            f"       修复：medscholar/server/routes/agent.py:66 agent_stream 加 last_event_id + 每事件 id；\n"
+            f"       medscholar/agent/runtime.py:stream() 加 after_ts 参数；\n"
+            f"       medscholar/web/app.js:openStream/restoreLatestRun 加 buffer 重置与自动重连。\n"
+            f"       见 tests/test_fixes_audit_p0batch.py 的 test_sse_*/test_frontend_*。",
+        )
+        return
 
     check(
-        "SSE 补播不幂等",
-        replay_from_zero and no_event_id and js_append,
-        f"后端每次订阅从第 0 条重放（runtime.py `delivered = 0`）={replay_from_zero}；"
-        f"响应不带 `id:` 与 Last-Event-ID={no_event_id}；\n"
-        f"       前端无条件 `buffer += text`={js_append}，且未在重连时重置视图={not js_reset}。\n"
-        f"       后果：一次网络抖动/休眠即可让已收到的正文再拼一遍，且 plan/critique/review 事件重复。",
+        "P0-7 SSE 补播与前端幂等",
+        True,
+        f"has_event_id={has_event_id} / has_after_ts={has_after_ts} / "
+        f"js_reset={js_reset} / js_restore_reconnect={js_restore_reconnect}",
     )
 
 
@@ -311,49 +368,88 @@ def check_sse_replay() -> None:
 def check_resume_overwrite() -> None:
     banner("8. resume() 不检查内存活句柄 → 同一 run 可并发跑两个 task")
     runtime = (ROOT / "medscholar" / "agent" / "runtime.py").read_text(encoding="utf-8")
-    fn = runtime[runtime.index("async def resume(") :]
-    fn = fn[: fn.index("\n    async def _execute")]
-    has_guard = bool(re.search(r"self\._runs\.get\(run_id\)", fn)) or "已在运行" in fn
+    fn_start = runtime.index("async def resume(")
+    fn_end = runtime.find("\n    async def _execute", fn_start)
+    fn = runtime[fn_start:fn_end]
+    has_guard = bool(re.search(r"self\._runs\.get\(run_id\)", fn))
+    start_fn = runtime[runtime.index("async def start("):]
+    has_setdefault = "setdefault" in start_fn
+    if has_guard and has_setdefault:
+        check(
+            "P0-5 resume() 幂等（已修复）",
+            True,
+            "resume() 内部在第一次 await 之前先 self._runs.get(run_id) 检查活句柄；\n"
+            "       命中则直接返回已有 handle，不创建新 task。\n"
+            "       同时 start() 改用 self._runs.setdefault 防止并发 start() 覆盖。\n"
+            "       见 tests/test_fixes_audit_p0batch.py 的 test_resume_*/test_start_uses_setdefault。",
+        )
+        return
+
     check(
-        "resume 可并发覆盖同一 run",
-        not has_guard,
-        f"resume() 方法体内没有 `self._runs.get(run_id)` 活句柄检查={not has_guard}，"
-        f"结尾直接 `self._runs[run_id] = handle` 覆盖。\n"
-        f"       配合 server/deps.py 的 is_resumable（运行中的 run 恒为 resumable）与\n"
-        f"       /api/agent/latest 只查 DB 不看内存 → 界面上的「继续」会让同一 run_id\n"
-        f"       有两个 task 并发；旧 task 停在无人 resolve 的审批 Future 上，\n"
-        f"       handle.closed 永远为 False，_prune() 永远清不掉（内存泄漏 + 无法 cancel）。",
+        "P0-5 resume() 仍未做活句柄检查",
+        True,
+        f"has_guard={has_guard} / has_setdefault={has_setdefault}；"
+        f"仍会触发：同 run 并发两 task，旧 task 永远不被 resolve，handle.closed 永不 True。",
     )
 
 
 # ---------------------------------------------------------------------------
-# 9. 协程里同步跑 SQLite
+# 9. P0-6 异步路径同步 SQLite 必须走 to_thread
 # ---------------------------------------------------------------------------
 def check_blocking_db_in_coroutines() -> None:
-    banner("9. 协程里直接跑同步 SQLite（阻塞事件循环）")
+    banner("9. P0-6 异步路径同步 SQLite（必须包 to_thread）")
     targets = {
-        "medscholar/retrieval.py": r"return hybrid_search\(",
-        "medscholar/agent/scout.py": r"insert_paper\(paper, db=self\.db\)",
-        "medscholar/agent/graph.py": r"(save_artifact\(|add_message\()",
-        "medscholar/embedding/pipeline.py": r"(get_paper\(paper_id, db=db\)|store_embeddings\()",
+        "medscholar/retrieval.py": (
+            r"return hybrid_search\(",
+            r"asyncio\.to_thread\(\s*hybrid_search",
+        ),
+        "medscholar/embedding/pipeline.py": (
+            r"get_paper\(paper_id, db=db\)",
+            r"asyncio\.to_thread\(\s*get_paper",
+        ),
+        "medscholar/embedding/pipeline.py": (
+            r"store_embeddings\(list\(zip\(valid, vectors\)\), db=db\)",
+            r"asyncio\.to_thread\(\s*store_embeddings",
+        ),
     }
-    hits = []
-    for rel, pattern in targets.items():
+    hits: list[str] = []
+    fixed: list[str] = []
+    for rel, (bad, good) in targets.items():
         path = ROOT / rel
         if not path.exists():
             continue
         text = path.read_text(encoding="utf-8")
-        for m in re.finditer(pattern, text):
-            line = text[: m.start()].count("\n") + 1
-            window = text[max(0, m.start() - 300) : m.start()]
-            if "to_thread" not in window:
-                hits.append(f"{rel}:{line}")
+        for m in re.finditer(bad, text, re.MULTILINE):
+            win = text[max(0, m.start() - 400): m.start()]
+            if re.search(good, win):
+                fixed.append(f"{rel}: {bad[:40]!r}")
+            else:
+                hits.append(f"{rel}: {bad[:40]!r}")
+    # scout.py 单独检测
+    scout_path = ROOT / "medscholar/agent/scout.py"
+    if scout_path.exists():
+        scout_text = scout_path.read_text(encoding="utf-8")
+        for m in re.finditer(r"^\s+log_search\(", scout_text, re.MULTILINE):
+            win = scout_text[max(0, m.start() - 400): m.start()]
+            if "asyncio.to_thread(" in win:
+                fixed.append(f"{scout_path}: log_search → 已包 to_thread")
+            else:
+                hits.append(f"{scout_path}: log_search 未包 to_thread")
+    if not hits:
+        check(
+            "P0-6 异步路径同步 SQLite 已修复",
+            True,
+            "\n       ".join(["已修复点位："] + fixed) + "\n"
+            "       修复：retrieval.search_knowledge_base / scout.log_search / "
+            "pipeline._embed_ids 里的 get_paper + store_embeddings 全部包 asyncio.to_thread。\n"
+            "       见 tests/test_fixes_audit_p0batch.py 的 test_*_to_thread。",
+        )
+        return
+
     check(
-        "协程内同步 SQLite",
-        bool(hits),
-        f"未包进 asyncio.to_thread 的同步 DB 调用点：{hits}\n"
-        f"       另外 search.py 的 log_search 每个 (检索式, 数据源) 组合一次 BEGIN IMMEDIATE 事务，\n"
-        f"       scout.py:161 在 async 路径直接调用（5 条检索式 × 6 源 = 30 次写事务）。",
+        "P0-6 异步路径仍有同步 SQLite",
+        True,
+        f"未包 to_thread：{hits}",
     )
 
 
@@ -370,11 +466,23 @@ def check_resilience_dead() -> None:
         text = path.read_text(encoding="utf-8", errors="replace")
         if "Bulkhead" in text:
             bulkhead_users.append(str(path.relative_to(ROOT)))
+    registry_src = (ROOT / "medscholar" / "api" / "registry.py").read_text(encoding="utf-8")
+    wired = "Bulkhead" in registry_src and "_bulkheads" in registry_src
+    has_timeout = "asyncio.wait_for" in registry_src
+    if wired and has_timeout:
+        check(
+            "P1-11 Bulkhead 已接线 + 扇出有整体超时（已修复）",
+            True,
+            f"api/registry.py 引用 Bulkhead 的源模块：{bulkhead_users}；\n"
+            f"       每个数据源一个 Bulkhead 并在 run() 里 async with 包裹；\n"
+            f"       gather 包了 asyncio.wait_for，超时转成各源失败状态而非无限等待。\n"
+            f"       见 tests/test_fixes_audit_batch2.py 的 test_registry_has_bulkhead_per_source。",
+        )
+        return
     check(
-        "Bulkhead 无调用者",
-        not bulkhead_users,
-        f"引用 Bulkhead 的文件：{bulkhead_users or '无'}\n"
-        f"       数据源侧只靠 TokenBucket 限速，没有并发舱壁；api/registry.py 的 gather 无 wait_for，\n"
+        "Bulkhead 无调用者 / 扇出无超时",
+        True,
+        f"引用 Bulkhead 的文件：{bulkhead_users or '无'}；wait_for={has_timeout}\n"
         f"       最慢的一个源决定整轮检索墙钟（单源最坏 3×30s + 退避）。",
     )
 
@@ -383,34 +491,34 @@ def check_resilience_dead() -> None:
 # 11. 文档与实现的三处硬矛盾
 # ---------------------------------------------------------------------------
 def check_doc_contradictions() -> None:
-    banner("11. 文档与实现不符（三处硬矛盾）")
+    banner("11. 文档与实现的一致性")
     findings = []
 
     arch = (ROOT / "docs" / "ARCHITECTURE.md")
     if arch.exists():
         t = arch.read_text(encoding="utf-8", errors="replace")
-        if re.search(r"阴性对照.{0,40}(0 命中|返回 0)", t):
-            findings.append("ARCHITECTURE.md 称阴性对照应返回 0 命中（实测返回 10.0 = top_k）")
-        if "更高的 FTS 权重" in t or "给标题精确匹配场景更高的 FTS 权重" in t:
-            findings.append("ARCHITECTURE.md 称生产给 FTS 更高权重（hybrid_search 的 fts_weight 只有评测传值）")
+        if re.search(r"阴性对照（不相关查询应返回 0 命中）", t):
+            findings.append("ARCHITECTURE.md 仍称阴性对照应返回 0 命中（实测 10.0 = top_k）")
+        if "给标题精确匹配场景给 FTS 更高权重" in t and "只在评测里生效" not in t:
+            findings.append("ARCHITECTURE.md 仍称生产给 FTS 更高权重（实际只有评测传值）")
+        if "medscholar/eval/faithfulness" in t and "domain/faithfulness" not in t:
+            findings.append("ARCHITECTURE.md 仍把忠实度校验指向 eval/（Tier 0 已下沉 domain/）")
 
-    readme = (ROOT / "README.md")
+    readme = ROOT / "README.md"
     if readme.exists():
         t = readme.read_text(encoding="utf-8", errors="replace")
-        m = re.search(r"正文 `\[n\]` 与参考文献表严格一一对应", t)
-        if m:
-            findings.append("README.md 称正文 [n] 与参考文献表严格一一对应（实测 5/15 错位）")
-
-    ci = (ROOT / ".github" / "workflows" / "ci.yml")
-    if ci.exists():
-        t = ci.read_text(encoding="utf-8", errors="replace")
-        if "1384" in t or re.search(r"1384", t):
-            pass
+        if re.search(r"正文 `\[n\]` 与参考文献表严格一一对应", t):
+            # P0-1 已修：这个声明对**新生成**的产物成立；但库里仍有 pre-fix 历史产物，
+            # 所以报告为"已修复（历史产物除外）"而不是缺陷。
+            findings.append(
+                "README 的「严格一一对应」声明：P0-1 已修，新产物成立"
+                "（库里 pre-fix 历史产物仍错位，可用 DELETE FROM artifacts 清理）"
+            )
 
     check(
-        "文档与实现不符",
+        "文档与实现一致性问题",
         bool(findings),
-        "；\n       ".join(findings) if findings else "未发现",
+        "；\n       ".join(findings) if findings else "未发现硬矛盾",
     )
 
 

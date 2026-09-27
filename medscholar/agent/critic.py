@@ -267,11 +267,17 @@ class CriticAgent:
         index_to_paper = {index: paper for index, paper in entries}
         result = CritiqueResult()
 
-        # 启发式基线总是先算，作为 LLM 失败时的回退结果
-        heuristic = {
-            index: heuristic_assessment(paper, topic=topic, index=index)
-            for index, paper in entries
-        }
+        # 启发式基线总是先算，作为 LLM 失败时的回退结果。
+        # P1-2：若 _llm_assess 已经算过（critique_max_papers < len(entries) 时走 LLM 路径），
+        # 复用其缓存，避免 heuristic_assessment 被算两次（100+ 文献时浪费明显）。
+        cached = getattr(self, "_last_heuristic_assessments", None)
+        if cached and set(cached) == set(idx for idx, _ in entries):
+            heuristic = cached
+        else:
+            heuristic = {
+                index: heuristic_assessment(paper, topic=topic, index=index)
+                for index, paper in entries
+            }
 
         if use_llm and entries and not self.config.offline:
             try:
@@ -346,17 +352,24 @@ class CriticAgent:
         其余文献由离线启发式评估，两者在 :meth:`assess` 中等权融合。
         """
         limit = min(len(entries), max(4, self.config.agent.critique_max_papers))
+        # P1-2：先一次性算启发式评估，后面既用作排序 key 又复用评估结果——
+        # 原代码 sorted key 里调用 heuristic_assessment 但 subset 出来后没传回去，
+        # 导致 assess() 里又得重算一次（白白浪费 N×N 次启发式）。
+        pre_scored: dict[int, PaperAssessment] = {
+            idx: heuristic_assessment(paper, topic=topic, index=idx)
+            for idx, paper in entries
+        }
         if len(entries) > limit:
             scored = sorted(
                 entries,
-                key=lambda pair: -heuristic_assessment(
-                    pair[1], topic=topic, index=pair[0]
-                ).combined,
+                key=lambda pair: -pre_scored[pair[0]].combined,
             )
             subset = scored[:limit]
             subset.sort(key=lambda pair: pair[0])  # 保持引用编号顺序，便于模型对上号
         else:
             subset = list(entries)
+        # 缓存这次算的启发式结果：assess() 会用它，避免重复计算
+        self._last_heuristic_assessments = pre_scored
 
         digest = build_context_digest(subset, max_abstract=DIGEST_MAX_ABSTRACT_CRITIQUE)
         logger.info("LLM 逐篇点评 %d/%d 篇文献", len(subset), len(entries))

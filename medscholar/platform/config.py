@@ -194,6 +194,11 @@ class LLMSettings(BaseModel):
     #: "-1" 表示常驻不卸载（显存够用时最省时间）。
     keep_alive: str = "30m"
     failure_hint: str = ""       # 模型不可用时展示给用户的提示
+    #: P1-3 按阶段路由：``{"<stage>": LLMSettings}``。阶段名见 ``get_llm_for_stage``
+    #: 的调用点（plan / critique / section / review ...）。未配置的阶段回落到本对象。
+    #: 典型用法：规划与批判用强模型、正文大批量生成用便宜模型。
+    #: 注意：Pydantic 对自引用模型需要 ``model_rebuild()``（在类定义外调用，见文件末尾）。
+    routing: dict[str, "LLMSettings"] = Field(default_factory=dict)
 
     def consistency_error(self) -> str:
         """检查 provider 与 model 是否自洽，不自洽时返回可照做的中文说明。
@@ -256,7 +261,7 @@ class RetrievalSettings(BaseModel):
             "journal": 0.5,
         }
     )
-    min_score: float = 0.0
+    min_score_ratio: float = 0.0  # P2-5：相对阈值（相对 max(rrf)），0 = 关闭；负值视作关闭
 
 
 class AgentSettings(BaseModel):
@@ -370,6 +375,11 @@ class AppConfig(BaseModel):
                 for name, s in self.sources.as_dict().items()
             },
         }
+
+
+# P1-3：``LLMSettings.routing`` 是自引用类型（``dict[str, LLMSettings]``），
+# Pydantic v2 需要显式 rebuild 才能解析该前向引用。放在类定义之后、模块级调用一次。
+LLMSettings.model_rebuild()
 
 
 # ----------------------------------------------------------------- 加载逻辑

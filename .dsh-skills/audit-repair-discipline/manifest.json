@@ -1,0 +1,44 @@
+{
+  "name": "audit-repair-discipline",
+  "version": "1.0.0",
+  "produced_by": "MiniMax-M3 (medscholar-agent audit, 2026-09-27)",
+  "purpose": "把'修深度审计中发现的静默失效类缺陷'这一类复合任务的工作纪律固化下来",
+  "intended_consumers": [
+    "未来 AI agent（MiniMax、DeepSeek、Claude、GPT 等）在做类似任务时"
+  ],
+  "scope": {
+    "applies_when": [
+      "修深度审计 / 安全审计 / 性能审计报告里的 P0 / 静默失效缺陷",
+      "改代码 + 改测试 + 改文档 + 改 verify 脚本四件套",
+      "涉及栈推断、鸭子类型、白名单文件、端到端断言等高风险实践"
+    ],
+    "does_not_apply": [
+      "新功能开发",
+      "纯性能优化",
+      "UI 重构"
+    ]
+  },
+  "key_lessons": [
+    "闭合块外层加一行 = 全块重缩进；不要只缩进一行",
+    "审计/复现脚本必须区分'复现'与'修复后'两种 PASS 含义",
+    "端到端测试硬/软断言取决于数据是否随代码生成",
+    "栈推断带'inferred:'前缀，限制 3 层以内，fallback 到 sys._getframe",
+    "文档里的测试数与代码基线必须同源更新",
+    "修代码时跨过架构白名单上限的改动必须先拆模块",
+    "鸭子类型 / Sequence[tuple] 配 alias + docstring 示例",
+    "commit 信息列 Still open 清单，不要写'全部修完'",
+    "数据契约变更要给出清理/回滚命令",
+    "复现脚本与修复验收脚本必须分别维护"
+  ],
+  "anti_patterns_avoided": [
+    "try/except Exception: pass 静默吞错",
+    "verify 脚本只输出布尔 PASS/FAIL",
+    "commit 用绝对化措辞",
+    "用 deque 窗口统计代替真正的长期聚合"
+  ],
+  "trigger_conditions": [
+    "任务描述含'修审计'、'静默失效'、'端到端回归'",
+    "前置条件：审计报告已存在 + 复现脚本可执行",
+    "涉及 ≥ 4 个文件的协同修改"
+  ]
+}

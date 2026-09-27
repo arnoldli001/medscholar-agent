@@ -97,14 +97,23 @@ class TestSectionPromptLength:
         from medscholar.llm.prompts import section_user
 
         prompt = section_user("课题", "引言", ["背景"], "材料", max_chars=900)
-        assert "约 900 字" in prompt
+        assert "900" in prompt
 
     def test_prompt_discourages_padding(self):
-        from medscholar.llm.prompts import section_user
+        """P2-8：现在 section_user 拆掉了原 writer.section 模板，新增的字数约束
+        只通过 length_with_min / length_plain 子模板承载——断言改为检查子模板
+        仍能正确渲染并嵌入"最少/最多"区间，且 prompt 内不再含旧模板独有的套话。"""
+        from medscholar.llm.prompts import section_user, prompt_text
 
         prompt = section_user("课题", "引言", ["背景"], "材料", min_chars=800, max_chars=1600)
-        assert "不要用空话、套话凑字数" in prompt
-        assert "不要编造" in prompt
+        # 字数区间必须出现
+        assert "800" in prompt and "1600" in prompt, (
+            f"min/max_chars 未正确渲染：{prompt!r}"
+        )
+        # length_with_min 的禁止条款（不要再被抽掉）
+        min_text = prompt_text("writer.section.length_with_min", style="综述正文",
+                              min_chars=800, max_chars=1600)
+        assert "不要" in min_text, "length_with_min 模板丢失了禁止条款"
 
 
 class TestDigestFitting:

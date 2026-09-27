@@ -179,5 +179,23 @@ class OpenAIBackend:
                         started=started,
                     )
                     break
+        except GeneratorExit:  # P1-5：调用方提前退出（客户端断开 / 上层 cancel）
+            self._record(
+                prompt_tokens=0,
+                completion_tokens=0,
+                started=started,
+                ok=False,
+                error_kind="cancelled",
+            )
+            raise
+        except Exception as exc:
+            self._record(
+                prompt_tokens=0,
+                completion_tokens=0,
+                started=started,
+                ok=False,
+                error_kind=failure_kind(exc),
+            )
+            raise
         finally:
             await response.aclose()
